@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Shield,
   Star,
+  CalendarRange,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { href: '/dashboard/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+  { href: '/dashboard/report', label: 'Contribution Report', icon: CalendarRange },
 ]
 
 const ADMIN_NAV_ITEMS = [

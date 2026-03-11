@@ -2,7 +2,7 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 
 export type TaskStatus = "todo" | "in_progress" | "submitted" | "completed";
 export type TaskCategory = "content" | "development" | "design" | "community" | "research";
-export type TaskPriority = "low" | "medium" | "high";
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
 export interface ITaskSubmission {
   githubLink?: string;
@@ -10,6 +10,15 @@ export interface ITaskSubmission {
   notionLink?: string;
   comments?: string;
   submittedAt?: Date;
+}
+
+export interface ITaskHistoryEntry {
+  actor: Types.ObjectId;
+  action: string;
+  fromStatus?: TaskStatus;
+  toStatus?: TaskStatus;
+  createdAt: Date;
+  meta?: Record<string, unknown>;
 }
 
 export interface ITask extends Document {
@@ -23,6 +32,7 @@ export interface ITask extends Document {
   createdBy: Types.ObjectId;
   deadline?: Date;
   submission?: ITaskSubmission;
+  history: ITaskHistoryEntry[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,7 +54,7 @@ const TaskSchema = new Schema<ITask>(
     },
     priority: {
       type: String,
-      enum: ["low", "medium", "high"],
+      enum: ["low", "medium", "high", "urgent"],
       default: "medium",
     },
     points: { type: Number, default: 0, min: 0 },
@@ -58,6 +68,16 @@ const TaskSchema = new Schema<ITask>(
       comments: String,
       submittedAt: Date,
     },
+    history: [
+      {
+        actor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        action: { type: String, required: true },
+        fromStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
+        toStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
+        createdAt: { type: Date, default: Date.now },
+        meta: { type: Schema.Types.Mixed },
+      },
+    ],
   },
   { timestamps: true }
 );

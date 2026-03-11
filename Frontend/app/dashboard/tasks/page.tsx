@@ -27,7 +27,6 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import {
-  Task,
   TaskStatus,
   STATUS_LABELS,
 } from '@/lib/data'
@@ -48,9 +47,9 @@ function TaskCard({
   onSubmit,
   onStart,
 }: {
-  task: Task
-  onSubmit: (task: Task) => void
-  onStart: (task: Task) => void
+  task: any
+  onSubmit: (task: any) => void
+  onStart: (task: any) => void
 }) {
   return (
     <div className="glass rounded-xl border border-border/50 p-4 hover:border-primary/20 transition-all hover:-translate-y-0.5 cursor-default">
@@ -101,40 +100,46 @@ function TaskCard({
 
 export default function TasksPage() {
   const { currentUser } = useApp()
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [submitTarget, setSubmitTarget] = useState<Task | null>(null)
+  const [tasks, setTasks] = useState<any[]>([])
+  const [submitTarget, setSubmitTarget] = useState<any | null>(null)
   const [submission, setSubmission] = useState({ githubLink: '', notionLink: '', googleDoc: '', comments: '' })
 
   useEffect(() => {
-    apiFetch<Task[]>('/dashboard/tasks')
+    apiFetch<any[]>('/dashboard/tasks')
       .then(setTasks)
       .catch(() => setTasks([]))
   }, [currentUser?.id])
 
-  const myTasks = currentUser.role === 'admin' ? tasks : tasks.filter((t) => t.assignedTo === currentUser.id)
+  const myTasks = currentUser.role === 'admin' ? tasks : tasks
 
-  const columns = COLUMN_ORDER.reduce<Record<TaskStatus, Task[]>>((acc, status) => {
+  const columns = COLUMN_ORDER.reduce<Record<TaskStatus, any[]>>((acc, status) => {
     acc[status] = myTasks.filter((t) => t.status === status)
     return acc
   }, { todo: [], in_progress: [], submitted: [], completed: [] })
 
-  function handleStart(task: Task) {
-    apiFetch<Task>(`/dashboard/tasks/${task.id}`, {
+  function handleStart(task: any) {
+    apiFetch<any>(`/dashboard/tasks/${task._id}`, {
       method: 'PATCH',
       body: JSON.stringify({ status: 'in_progress' }),
     }).catch(() => {})
-    setTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, status: 'in_progress' } : t))
+    setTasks((prev) => prev.map((t) => t._id === task._id ? { ...t, status: 'in_progress' } : t))
   }
 
   function handleSubmit() {
     if (!submitTarget) return
-    apiFetch<Task>(`/dashboard/tasks/${submitTarget.id}`, {
+    apiFetch<any>(`/dashboard/tasks/${submitTarget._id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'submitted' }),
+      body: JSON.stringify({
+        status: 'submitted',
+        submission: {
+          ...submission,
+          submittedAt: new Date().toISOString(),
+        },
+      }),
     }).catch(() => {})
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === submitTarget.id
+        t._id === submitTarget._id
           ? {
               ...t,
               status: 'submitted',
@@ -165,7 +170,7 @@ export default function TasksPage() {
                 </div>
                 <div className="space-y-3">
                   {col.map((task) => (
-                    <TaskCard key={task.id} task={task} onSubmit={setSubmitTarget} onStart={handleStart} />
+                    <TaskCard key={task._id} task={task} onSubmit={setSubmitTarget} onStart={handleStart} />
                   ))}
                   {col.length === 0 && (
                     <div className="rounded-xl border border-dashed border-border/40 p-6 text-center text-xs text-muted-foreground">

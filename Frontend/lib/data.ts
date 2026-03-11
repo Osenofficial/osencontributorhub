@@ -4,7 +4,7 @@
 export type Role = 'admin' | 'lead' | 'associate' | 'intern'
 export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'completed'
 export type TaskCategory = 'content' | 'development' | 'design' | 'community' | 'research'
-export type Priority = 'low' | 'medium' | 'high'
+export type Priority = 'low' | 'medium' | 'high' | 'urgent'
 
 export interface User {
   id: string

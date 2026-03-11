@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { Task } from "../models/Task";
 import { Notification } from "../models/Notification";
+import { User } from "../models/User";
 
 export const dashboardRouter = Router();
 
@@ -43,15 +44,29 @@ dashboardRouter.get("/tasks", async (req: AuthRequest, res, next) => {
 dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
-    const { status } = req.body;
-    const task = await Task.findOneAndUpdate(
-      { _id: req.params.id, assignedTo: userId },
-      { status },
-      { new: true }
-    );
+    const { status, submission } = req.body;
+
+    const task = await Task.findOne({ _id: req.params.id, assignedTo: userId });
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
+
+    const fromStatus = task.status;
+    task.status = status;
+    if (submission) {
+      task.submission = submission;
+    }
+    task.history.push({
+      actor: userId,
+      action: "status_update",
+      fromStatus,
+      toStatus: status,
+      createdAt: new Date(),
+      meta: submission ? { hasSubmission: true } : undefined,
+    });
+
+    await task.save();
+
     res.json(task);
   } catch (err) {
     next(err);
@@ -62,8 +77,18 @@ dashboardRouter.get("/notifications", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
     const notifications = await Notification.find({ user: userId })
-      .sort({ createdAt: -1 })
-      .limit(20);
+      .sort({ createdAt: -1 });
+    res.json(notifications);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.post("/notifications/read-all", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    await Notification.updateMany({ user: userId, read: false }, { read: true });
+    const notifications = await Notification.find({ user: userId }).sort({ createdAt: -1 });
     res.json(notifications);
   } catch (err) {
     next(err);
@@ -121,6 +146,73 @@ dashboardRouter.get("/leaderboard", async (_req: AuthRequest, res, next) => {
     ]);
 
     res.json(leaderboard);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Contribution report for a user in a date range
+dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
+  try {
+    const { q, from, to } = req.query as { q?: string; from?: string; to?: string };
+
+    let targetUser = req.user!;
+
+    if (q) {
+      const query = q.trim();
+      const user = await User.findOne({
+        $or: [{ email: query.toLowerCase() }, { name: new RegExp(query, "i") }],
+      });
+      if (!user) {
+        return res.status(404).json({ message: "User not found for given query" });
+      }
+      targetUser = user;
+    }
+
+    const dateFilter: Record<string, unknown> = {};
+    if (from || to) {
+      dateFilter.createdAt = {};
+      if (from) {
+        (dateFilter.createdAt as any).$gte = new Date(from);
+      }
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        (dateFilter.createdAt as any).$lte = end;
+      }
+    }
+
+    const match: any = {
+      assignedTo: targetUser._id,
+      ...(Object.keys(dateFilter).length ? dateFilter : {}),
+    };
+
+    const tasks = await Task.find(match).sort({ createdAt: -1 });
+
+    const totalPoints = tasks.reduce((sum, t) => sum + (t.points || 0), 0);
+    const byStatus = tasks.reduce(
+      (acc, t) => {
+        acc[t.status] = (acc[t.status] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
+
+    res.json({
+      user: {
+        id: targetUser._id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.role,
+      },
+      range: { from: from || null, to: to || null },
+      summary: {
+        taskCount: tasks.length,
+        totalPoints,
+        byStatus,
+      },
+      tasks,
+    });
   } catch (err) {
     next(err);
   }

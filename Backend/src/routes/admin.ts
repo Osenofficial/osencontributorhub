@@ -132,6 +132,16 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
       assignedTo,
       createdBy: adminId,
       deadline,
+      history: [
+        {
+          actor: adminId,
+          action: "created",
+          fromStatus: "todo",
+          toStatus: "todo",
+          createdAt: new Date(),
+          meta: { assignedTo },
+        },
+      ],
     });
 
     await Notification.create({
@@ -161,14 +171,29 @@ adminRouter.get("/tasks", requireRole("admin", "lead"), async (_req: AuthRequest
 adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const { status, points } = req.body;
-    const update: Record<string, unknown> = {};
-    if (status) update.status = status;
-    if (typeof points === "number") update.points = points;
-
-    const task = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
+    const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
+
+    const fromStatus = task.status;
+    if (status) {
+      task.status = status;
+    }
+    if (typeof points === "number") {
+      task.points = points;
+    }
+    task.history.push({
+      actor: req.user!._id,
+      action: "admin_update",
+      fromStatus,
+      toStatus: task.status,
+      createdAt: new Date(),
+      meta: typeof points === "number" ? { points } : undefined,
+    });
+
+    await task.save();
+
     res.json(task);
   } catch (err) {
     next(err);
