@@ -1,36 +1,18 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, CheckCircle2, ClipboardList, Trophy, Users, Zap, Star, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { LandingNav, LandingFooter } from '@/components/landing-nav'
-import { USERS, MONTHLY_POINT_CAP, POINT_VALUE_INR } from '@/lib/data'
 import { AvatarCircle } from '@/components/avatar-circle'
+import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const HOW_IT_WORKS = [
-  {
-    icon: Users,
-    title: 'Join the Community',
-    description: 'Create your OSEN profile and become part of a thriving developer community.',
-    color: 'text-neon-purple',
-    glow: 'neon-glow-purple',
-    border: 'border-primary/30',
-  },
-  {
-    icon: ClipboardList,
-    title: 'Pick Up Tasks',
-    description: 'Browse and get assigned tasks across development, design, content, and research.',
-    color: 'text-neon-cyan',
-    glow: 'neon-glow-cyan',
-    border: 'border-accent/30',
-  },
-  {
-    icon: Trophy,
-    title: 'Earn Points & Rewards',
-    description: 'Complete tasks to earn points. Each point equals ₹50 in real value.',
-    color: 'text-yellow-400',
-    glow: '',
-    border: 'border-yellow-400/30',
-  },
+  { icon: Users, title: 'Join the Community', description: 'Create your OSEN profile and become part of a thriving developer community.', color: 'text-neon-purple', glow: 'neon-glow-purple', border: 'border-primary/30' },
+  { icon: ClipboardList, title: 'Pick Up Tasks', description: 'Browse and get assigned tasks across development, design, content, and research.', color: 'text-neon-cyan', glow: 'neon-glow-cyan', border: 'border-accent/30' },
+  { icon: Trophy, title: 'Earn Points & Rewards', description: 'Complete tasks to earn points. Each point equals ₹50 in real value.', color: 'text-yellow-400', glow: '', border: 'border-yellow-400/30' },
 ]
 
 const CONTRIBUTION_TYPES = [
@@ -42,15 +24,29 @@ const CONTRIBUTION_TYPES = [
 ]
 
 export default function LandingPage() {
-  const topUsers = USERS.slice(0, 5)
+  const [stats, setStats] = useState<{ totalUsers: number; completedTasks: number; monthlyCapValue: number; pointValue: number; monthlyCap: number } | null>(null)
+  const [topUsers, setTopUsers] = useState<any[]>([])
+
+  useEffect(() => {
+    apiFetch<any>('/public/stats')
+      .then(setStats)
+      .catch(() => setStats(null))
+    apiFetch<any[]>('/public/leaderboard')
+      .then(setTopUsers)
+      .catch(() => setTopUsers([]))
+  }, [])
+
+  const displayStats = [
+    { value: stats ? `${stats.totalUsers}+` : '—', label: 'Active Contributors' },
+    { value: stats ? `${stats.completedTasks}+` : '—', label: 'Tasks Completed' },
+    { value: stats ? `₹${stats.monthlyCapValue}` : '—', label: 'Monthly Cap Value' },
+  ]
 
   return (
     <div className="min-h-screen">
       <LandingNav />
 
-      {/* Hero */}
       <section className="relative grid-bg pt-36 pb-28 overflow-hidden">
-        {/* Decorative orbs */}
         <div className="pointer-events-none absolute -top-32 -left-32 size-96 rounded-full bg-primary/10 blur-3xl" />
         <div className="pointer-events-none absolute top-20 right-0 size-80 rounded-full bg-accent/10 blur-3xl" />
 
@@ -83,13 +79,8 @@ export default function LandingPage() {
             </a>
           </div>
 
-          {/* Stats row */}
           <div className="mt-16 grid grid-cols-3 divide-x divide-border/50 overflow-hidden rounded-2xl border border-border/50 glass">
-            {[
-              { value: '8+', label: 'Active Contributors' },
-              { value: '10+', label: 'Tasks Completed' },
-              { value: `₹${MONTHLY_POINT_CAP * POINT_VALUE_INR}`, label: 'Monthly Cap Value' },
-            ].map((stat) => (
+            {displayStats.map((stat) => (
               <div key={stat.label} className="py-6 px-4 text-center">
                 <div className="text-2xl font-bold neon-text-purple">{stat.value}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{stat.label}</div>
@@ -99,7 +90,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* How it Works */}
       <section id="how-it-works" className="py-24">
         <div className="mx-auto max-w-6xl px-4">
           <div className="mb-14 text-center">
@@ -108,15 +98,12 @@ export default function LandingPage() {
           </div>
 
           <div className="grid gap-6 md:grid-cols-3">
-            {HOW_IT_WORKS.map((step, i) => (
-              <div
-                key={step.title}
-                className={cn('glass rounded-2xl border p-6 transition-transform hover:-translate-y-1', step.border)}
-              >
+            {HOW_IT_WORKS.map((step) => (
+              <div key={step.title} className={cn('glass rounded-2xl border p-6 transition-transform hover:-translate-y-1', step.border)}>
                 <div className={cn('mb-4 flex size-12 items-center justify-center rounded-xl border bg-background/50', step.border)}>
                   <step.icon className={cn('size-5', step.color)} />
                 </div>
-                <div className="mb-1 text-xs font-mono text-muted-foreground">Step 0{i + 1}</div>
+                <div className="mb-1 text-xs font-mono text-muted-foreground">Step 0{HOW_IT_WORKS.indexOf(step) + 1}</div>
                 <h3 className="mb-2 text-lg font-semibold">{step.title}</h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">{step.description}</p>
               </div>
@@ -125,7 +112,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Contribution System */}
       <section id="contributions" className="py-24 bg-card/30">
         <div className="mx-auto max-w-6xl px-4">
           <div className="mb-14 text-center">
@@ -146,7 +132,6 @@ export default function LandingPage() {
             ))}
           </div>
 
-          {/* Points value card */}
           <div className="mt-10 glass rounded-2xl border border-primary/20 p-6 md:p-8">
             <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
               <div>
@@ -156,16 +141,16 @@ export default function LandingPage() {
               <div className="flex gap-8">
                 <div className="text-center">
                   <div className="text-3xl font-bold neon-text-purple">1 pt</div>
-                  <div className="text-sm text-muted-foreground mt-1">= ₹{POINT_VALUE_INR}</div>
+                  <div className="text-sm text-muted-foreground mt-1">= ₹{stats?.pointValue ?? 50}</div>
                 </div>
                 <div className="w-px bg-border/50" />
                 <div className="text-center">
-                  <div className="text-3xl font-bold neon-text-cyan">{MONTHLY_POINT_CAP}</div>
+                  <div className="text-3xl font-bold neon-text-cyan">{stats?.monthlyCap ?? 100}</div>
                   <div className="text-sm text-muted-foreground mt-1">Monthly cap</div>
                 </div>
                 <div className="w-px bg-border/50" />
                 <div className="text-center">
-                  <div className="text-3xl font-bold text-green-400">₹{MONTHLY_POINT_CAP * POINT_VALUE_INR}</div>
+                  <div className="text-3xl font-bold text-green-400">₹{stats?.monthlyCapValue ?? 5000}</div>
                   <div className="text-sm text-muted-foreground mt-1">Max monthly</div>
                 </div>
               </div>
@@ -174,7 +159,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Leaderboard Preview */}
       <section id="leaderboard" className="py-24">
         <div className="mx-auto max-w-4xl px-4">
           <div className="mb-14 text-center">
@@ -182,53 +166,69 @@ export default function LandingPage() {
             <p className="text-muted-foreground text-pretty">The best builders rise to the top. Will you be next?</p>
           </div>
 
-          {/* Top 3 podium */}
-          <div className="mb-8 grid gap-4 md:grid-cols-3">
-            {topUsers.slice(0, 3).map((user, i) => {
-              const glowClass = i === 0 ? 'neon-glow-purple border-primary/50' : i === 1 ? 'neon-glow-blue border-neon-blue/50' : 'neon-glow-cyan border-accent/50'
-              const rankColors = ['text-yellow-400', 'text-slate-400', 'text-amber-600']
-              const order = i === 0 ? 'md:order-2' : i === 1 ? 'md:order-1' : 'md:order-3'
-              const scale = i === 0 ? 'md:scale-105' : ''
-              return (
-                <div key={user.id} className={cn('glass rounded-2xl border p-6 text-center transition-transform hover:-translate-y-1 animate-float', glowClass, order, scale)} style={{ animationDelay: `${i * 0.5}s` }}>
-                  <div className={cn('mb-2 text-3xl font-bold', rankColors[i])}>#{user.rank}</div>
-                  <AvatarCircle initials={user.avatar} size="lg" className="mx-auto mb-3" />
-                  <div className="font-semibold">{user.name}</div>
-                  <div className="mt-1 text-2xl font-bold neon-text-purple">{user.points}</div>
-                  <div className="text-xs text-muted-foreground">points</div>
-                  <div className="mt-2 flex items-center justify-center gap-1 text-xs text-muted-foreground">
-                    <CheckCircle2 className="size-3 text-green-400" />
-                    {user.tasksCompleted} tasks
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Remaining */}
-          <div className="glass rounded-2xl border overflow-hidden">
-            {topUsers.slice(3).map((user, i) => (
-              <div key={user.id} className={cn('flex items-center gap-4 px-5 py-3.5 border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors')}>
-                <span className="w-6 text-center text-sm font-bold text-muted-foreground">#{user.rank}</span>
-                <AvatarCircle initials={user.avatar} size="sm" />
-                <span className="flex-1 text-sm font-medium">{user.name}</span>
-                <span className="text-sm font-bold text-primary">{user.points} pts</span>
-                <span className="text-xs text-muted-foreground hidden sm:block">{user.tasksCompleted} tasks</span>
+          {topUsers.length === 0 ? (
+            <div className="glass rounded-2xl border p-12 text-center">
+              <p className="text-muted-foreground">No contributors yet. Be the first!</p>
+              <Link href="/register" className="mt-4 inline-block">
+                <Button variant="outline" className="border-primary/30 text-primary hover:bg-primary/10 gap-2">
+                  Join Now
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="mb-8 grid gap-4 md:grid-cols-3">
+                {topUsers.slice(0, 3).map((user, i) => {
+                  const glowClass = i === 0 ? 'neon-glow-purple border-primary/50' : i === 1 ? 'neon-glow-blue border-neon-blue/50' : 'neon-glow-cyan border-accent/50'
+                  const rankColors = ['text-yellow-400', 'text-slate-400', 'text-amber-600']
+                  const order = i === 0 ? 'md:order-2' : i === 1 ? 'md:order-1' : 'md:order-3'
+                  const scale = i === 0 ? 'md:scale-105' : ''
+                  const initials = user.initials ?? user.name?.slice(0, 2) ?? '?'
+                  const avatarSrc = user.avatar?.startsWith('http') ? user.avatar : null
+                  return (
+                    <div key={user.userId} className={cn('glass rounded-2xl border p-6 text-center transition-transform hover:-translate-y-1 animate-float', glowClass, order, scale)}>
+                      <div className={cn('mb-2 text-3xl font-bold', rankColors[i])}>#{user.rank ?? i + 1}</div>
+                      <AvatarCircle initials={initials} src={avatarSrc} size="lg" className="mx-auto mb-3" />
+                      <div className="font-semibold">{user.name}</div>
+                      <div className="mt-1 text-2xl font-bold neon-text-purple">{user.totalPoints ?? user.points ?? 0}</div>
+                      <div className="text-xs text-muted-foreground">points</div>
+                      <div className="mt-2 flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                        <CheckCircle2 className="size-3 text-green-400" />
+                        {user.completedTasks ?? user.tasksCompleted ?? 0} tasks
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
-          </div>
 
-          <div className="mt-6 text-center">
-            <Link href="/dashboard/leaderboard">
-              <Button variant="outline" className="border-primary/30 text-primary hover:bg-primary/10 gap-2">
-                <TrendingUp className="size-4" /> View Full Leaderboard
-              </Button>
-            </Link>
-          </div>
+              <div className="glass rounded-2xl border overflow-hidden">
+                {topUsers.slice(3).map((user, i) => {
+                  const initials = user.initials ?? user.name?.slice(0, 2) ?? '?'
+                  const avatarSrc = user.avatar?.startsWith('http') ? user.avatar : null
+                  return (
+                    <div key={user.userId} className={cn('flex items-center gap-4 px-5 py-3.5 border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors')}>
+                      <span className="w-6 text-center text-sm font-bold text-muted-foreground">#{user.rank ?? i + 4}</span>
+                      <AvatarCircle initials={initials} src={avatarSrc} size="sm" />
+                      <span className="flex-1 text-sm font-medium">{user.name}</span>
+                      <span className="text-sm font-bold text-primary">{user.totalPoints ?? user.points ?? 0} pts</span>
+                      <span className="text-xs text-muted-foreground hidden sm:block">{user.completedTasks ?? 0} tasks</span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="mt-6 text-center">
+                <Link href="/dashboard/leaderboard">
+                  <Button variant="outline" className="border-primary/30 text-primary hover:bg-primary/10 gap-2">
+                    <TrendingUp className="size-4" /> View Full Leaderboard
+                  </Button>
+                </Link>
+              </div>
+            </>
+          )}
         </div>
       </section>
 
-      {/* CTA */}
       <section className="py-20">
         <div className="mx-auto max-w-3xl px-4 text-center">
           <div className="glass rounded-3xl border border-primary/20 p-10 md:p-14 neon-glow-purple relative overflow-hidden">

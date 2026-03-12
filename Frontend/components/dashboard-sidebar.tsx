@@ -8,17 +8,17 @@ import {
   Trophy,
   User,
   Bell,
-  Settings,
   Zap,
-  ChevronRight,
   Shield,
   Star,
   CalendarRange,
+  Send,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
 import { AvatarCircle } from '@/components/avatar-circle'
-import { getNotificationsByUser } from '@/lib/data'
+import { useEffect, useState } from 'react'
+import { apiFetch } from '@/lib/api'
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -36,8 +36,13 @@ const ADMIN_NAV_ITEMS = [
 export function DashboardSidebar() {
   const pathname = usePathname()
   const { currentUser } = useApp()
-  const notifications = getNotificationsByUser(currentUser.id)
-  const unread = notifications.filter((n) => !n.read).length
+  const [unread, setUnread] = useState(0)
+  useEffect(() => {
+    if (!currentUser?.id) return
+    apiFetch<any[]>('/dashboard/notifications')
+      .then((items) => setUnread(items.filter((n: any) => !n.read).length))
+      .catch(() => setUnread(0))
+  }, [currentUser?.id])
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border/50 bg-sidebar py-5 px-3">
@@ -78,7 +83,22 @@ export function DashboardSidebar() {
           )
         })}
 
-        {currentUser.role === 'admin' && (
+        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && (
+          <Link
+            href="/dashboard/submit-task"
+            className={cn(
+              'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all',
+              pathname === '/dashboard/submit-task'
+                ? 'bg-primary/15 text-primary border border-primary/20'
+                : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+            )}
+          >
+            <Send className={cn('size-4 shrink-0', pathname === '/dashboard/submit-task' ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
+            <span className="flex-1">Submit Task</span>
+          </Link>
+        )}
+
+        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && (
           <>
             <div className="mt-4 mb-2 px-3">
               <div className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-semibold">Admin</div>
@@ -108,7 +128,7 @@ export function DashboardSidebar() {
       {/* User card */}
       <div className="mt-4 glass rounded-xl border border-border/50 p-3">
         <div className="flex items-center gap-3">
-          <AvatarCircle initials={currentUser.avatar} size="sm" />
+          <AvatarCircle initials={currentUser.avatar} src={currentUser.avatarSrc} size="sm" />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium truncate">{currentUser.name}</div>
             <div className="text-xs text-muted-foreground flex items-center gap-1">

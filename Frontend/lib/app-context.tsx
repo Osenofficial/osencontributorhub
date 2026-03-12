@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import type { User } from '@/lib/data'
-import { USERS } from '@/lib/data'
 import { loginApi, meApi, registerApi, type AuthUser } from '@/lib/api'
 
 interface AppContextValue {
@@ -11,27 +10,33 @@ interface AppContextValue {
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string) => Promise<string>
   logout: () => void
-  allUsers: User[]
+  refreshUser: () => Promise<void>
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
 
 function mapAuthUserToUser(auth: AuthUser): User {
-  // Fallback to first mock user shape, but override dynamic fields from backend
-  const base = USERS[0]
+  const initials =
+    auth.name
+      ?.trim()
+      .split(/\s+/)
+      .map((s) => s[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?"
   return {
-    ...base,
     id: auth.id,
     name: auth.name,
     email: auth.email,
-    role: auth.role as any,
-    avatar: auth.avatar || base.avatar,
-    points: auth.points ?? base.points,
-    tasksCompleted: auth.tasksCompleted ?? base.tasksCompleted,
-    rank: auth.rank ?? base.rank,
-    joinedAt: auth.joinedAt ?? base.joinedAt,
-    bio: auth.bio ?? base.bio,
-    badges: base.badges,
+    role: auth.role as User['role'],
+    avatar: (auth as any).initials ?? auth.avatar ?? initials,
+    avatarSrc: auth.avatar?.startsWith('http') ? auth.avatar : undefined,
+    points: auth.points ?? 0,
+    tasksCompleted: auth.tasksCompleted ?? 0,
+    rank: auth.rank ?? 0,
+    joinedAt: auth.joinedAt ? new Date(auth.joinedAt).toISOString() : new Date().toISOString(),
+    bio: auth.bio ?? '',
+    badges: (auth.badges as any) ?? [],
   }
 }
 
@@ -69,6 +74,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return message
   }
 
+  async function refreshUser() {
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null
+    if (!token) return
+    try {
+      const u = await meApi()
+      setCurrentUser(mapAuthUserToUser(u))
+    } catch {
+      setCurrentUser(null)
+    }
+  }
+
   function handleLogout() {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem('token')
@@ -84,7 +100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         login: handleLogin,
         register: handleRegister,
         logout: handleLogout,
-        allUsers: USERS,
+        refreshUser,
       }}
     >
       {children}

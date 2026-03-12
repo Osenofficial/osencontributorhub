@@ -122,12 +122,13 @@ adminRouter.post("/users/:id/activate", requireRole("admin"), async (req: AuthRe
 adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const adminId = req.user!._id;
-    const { title, description, points, assignedTo, deadline, category, priority } = req.body;
+    const { title, description, points, assignedTo, deadline, category, contributionType, priority } = req.body;
     const task = await Task.create({
       title,
       description,
       points: points ?? 0,
       category,
+      contributionType,
       priority,
       assignedTo,
       createdBy: adminId,
@@ -193,6 +194,14 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
     });
 
     await task.save();
+
+    if (fromStatus === "submitted" && task.status === "completed" && task.assignedTo) {
+      await Notification.create({
+        user: task.assignedTo,
+        title: "Task Approved",
+        message: `Your submission for "${task.title}" has been approved!`,
+      });
+    }
 
     res.json(task);
   } catch (err) {

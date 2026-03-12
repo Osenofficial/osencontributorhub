@@ -53,7 +53,7 @@ export function DashboardTopbar({ title }: { title: string }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 rounded-xl px-2 py-1 hover:bg-muted/50 transition-colors">
-              <AvatarCircle initials={currentUser.avatar} size="sm" />
+              <AvatarCircle initials={currentUser.avatar} src={currentUser.avatarSrc} size="sm" />
               <div className="hidden sm:block text-left">
                 <div className="text-sm font-medium leading-none">{currentUser.name}</div>
                 <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">

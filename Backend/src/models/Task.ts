@@ -26,6 +26,7 @@ export interface ITask extends Document {
   description?: string;
   status: TaskStatus;
   category: TaskCategory;
+  contributionType?: string;
   priority: TaskPriority;
   points: number;
   assignedTo: Types.ObjectId;
@@ -52,6 +53,7 @@ const TaskSchema = new Schema<ITask>(
       enum: ["content", "development", "design", "community", "research"],
       required: true,
     },
+    contributionType: { type: String },
     priority: {
       type: String,
       enum: ["low", "medium", "high", "urgent"],

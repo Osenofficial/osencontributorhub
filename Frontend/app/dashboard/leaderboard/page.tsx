@@ -41,16 +41,16 @@ export default function LeaderboardPage() {
         <div className="grid gap-4 md:grid-cols-3 items-end">
           {[top3[1], top3[0], top3[2]].map((user, displayIdx) => {
             if (!user) return null
-            const rank = sorted.indexOf(user)
+            const rank = sorted.findIndex((u) => (u.userId ?? u.id) === (user.userId ?? user.id))
             const isFirst = rank === 0
             const glowClass = GLOW_CLASSES[rank]
             const rankColor = RANK_COLORS[rank]
-            const isCurrentUser = user.id === currentUser.id
+            const isCurrentUser = (user.userId ?? user.id) === currentUser?.id
             const delay = displayIdx * 0.3
 
             return (
               <div
-                key={user.id}
+                key={user.userId ?? user.id}
                 className={cn(
                   'glass rounded-2xl border p-6 text-center transition-transform hover:-translate-y-1 animate-float relative',
                   glowClass,
@@ -65,19 +65,19 @@ export default function LeaderboardPage() {
                   </div>
                 )}
                 <div className={cn('text-4xl font-bold mb-3', rankColor)}>#{rank + 1}</div>
-                <AvatarCircle initials={user.avatar} size="xl" className="mx-auto mb-3" />
+                <AvatarCircle initials={user.initials ?? user.name?.slice(0, 2) ?? '?'} src={user.avatar?.startsWith?.('http') ? user.avatar : undefined} size="xl" className="mx-auto mb-3" />
                 <div className="font-bold text-base">
                   {user.name}
                   {isCurrentUser && <span className="text-xs text-primary ml-1">(you)</span>}
                 </div>
                 <div className="text-muted-foreground text-xs mb-4 capitalize">{user.role}</div>
-                <div className={cn('text-3xl font-bold mb-1', 'neon-text-purple')}>{user.points}</div>
+                <div className={cn('text-3xl font-bold mb-1', 'neon-text-purple')}>{user.totalPoints ?? user.points ?? 0}</div>
                 <div className="text-xs text-muted-foreground mb-3">points</div>
                 <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
                   <CheckCircle2 className="size-3 text-green-400" />
-                  {user.tasksCompleted} tasks completed
+                  {user.completedTasks ?? user.tasksCompleted ?? 0} tasks completed
                 </div>
-                {user.badges.length > 0 && (
+                {user.badges?.length > 0 && (
                   <div className="mt-3 flex flex-wrap justify-center gap-1">
                     {user.badges.slice(0, 2).map((b) => (
                       <BadgeChip key={b.id} badge={b} size="sm" />
@@ -97,11 +97,12 @@ export default function LeaderboardPage() {
           </div>
           <div className="divide-y divide-border/50">
             {sorted.map((user, i) => {
-              const isCurrentUser = user.id === currentUser.id
-              const pointsPercent = Math.round((user.points / MONTHLY_POINT_CAP) * 100)
+              const isCurrentUser = (user.userId ?? user.id) === currentUser?.id
+              const points = user.totalPoints ?? user.points ?? 0
+              const pointsPercent = Math.round((points / MONTHLY_POINT_CAP) * 100)
               return (
                 <div
-                  key={user.id}
+                  key={user.userId ?? user.id}
                   className={cn(
                     'flex items-center gap-4 px-5 py-4 transition-colors',
                     isCurrentUser ? 'bg-primary/10' : 'hover:bg-muted/20',
@@ -110,7 +111,7 @@ export default function LeaderboardPage() {
                   <span className={cn('w-6 text-center font-bold text-sm shrink-0', i < 3 ? RANK_COLORS[i] : 'text-muted-foreground')}>
                     {i + 1}
                   </span>
-                  <AvatarCircle initials={user.avatar} size="sm" />
+                  <AvatarCircle initials={user.initials ?? user.name?.slice(0, 2) ?? '?'} src={user.avatar?.startsWith?.('http') ? user.avatar : undefined} size="sm" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className={cn('text-sm font-medium', isCurrentUser && 'text-primary')}>
@@ -125,11 +126,11 @@ export default function LeaderboardPage() {
                   </div>
                   <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground shrink-0">
                     <CheckCircle2 className="size-3 text-green-400" />
-                    {user.tasksCompleted}
+                    {user.completedTasks ?? user.tasksCompleted ?? 0}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Zap className="size-3.5 text-primary" />
-                    <span className="font-bold text-sm text-primary">{user.points}</span>
+                    <span className="font-bold text-sm text-primary">{user.totalPoints ?? user.points ?? 0}</span>
                   </div>
                 </div>
               )

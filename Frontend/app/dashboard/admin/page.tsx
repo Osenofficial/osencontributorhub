@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, CheckCircle2, Shield, Trash2, Eye, Users, ListChecks, Ban, Check } from 'lucide-react'
+import { Plus, CheckCircle2, Shield, Trash2, Eye, Users, ListChecks, Ban, Check, CalendarIcon } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { StatusBadge } from '@/components/status-badge'
 import { AvatarCircle } from '@/components/avatar-circle'
@@ -22,6 +22,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useApp } from '@/lib/app-context'
 import {
   Task,
@@ -157,6 +159,7 @@ export default function AdminPage() {
       assignedTo: form.assignedTo,
       deadline: form.deadline,
       category: form.category,
+      contributionType: form.contributionType || undefined,
       priority: form.priority,
     }
     apiFetch<Task>('/admin/tasks', {
@@ -176,7 +179,12 @@ export default function AdminPage() {
       method: 'PATCH',
       body: JSON.stringify({ status: 'completed' }),
     }).catch(() => {})
-    setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, status: 'completed' } : t))
+    setTasks((prev) =>
+      prev.map((t) => {
+        const tid = (t as any)._id ?? t.id
+        return tid === taskId ? { ...t, status: 'completed' } : t
+      })
+    )
     setViewTask(null)
   }
 
@@ -184,7 +192,7 @@ export default function AdminPage() {
     apiFetch(`/admin/tasks/${taskId}`, {
       method: 'DELETE',
     }).catch(() => {})
-    setTasks((prev) => prev.filter((t) => t.id !== taskId))
+    setTasks((prev) => prev.filter((t) => ((t as any)._id ?? t.id) !== taskId))
     setViewTask(null)
   }
 
@@ -456,146 +464,228 @@ export default function AdminPage() {
 
       {/* Create Task Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="glass border-border/60 max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Create New Task</DialogTitle>
-            <p className="text-xs text-muted-foreground">
-              Create a new OSEN contribution task and assign it to a contributor. Points and payout follow the rewards policy.
-            </p>
-          </DialogHeader>
-          <div className="space-y-5 py-2">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Task Title *</label>
-              <Input placeholder="e.g. Edit reel for OSEN launch" value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                className="bg-input border-border/60" />
+        <DialogContent className="max-w-2xl border-border bg-card shadow-2xl shadow-black/40 p-0 overflow-hidden">
+          {/* Header with solid background */}
+          <div className="bg-gradient-to-br from-primary/20 via-card to-accent/10 border-b border-border px-6 py-5">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-primary/20 border border-primary/30">
+                  <Plus className="size-5 text-primary" />
+                </div>
+                <div>
+                  <DialogTitle className="text-xl">Create New Task</DialogTitle>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    Assign a contribution task to a member. Fill in the basics below — points auto-fill from the policy.
+                  </p>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+
+          {/* Form body with solid background */}
+          <div className="bg-card px-6 py-5 space-y-6 max-h-[60vh] overflow-y-auto">
+            {/* Step 1: Basic info */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">1</span>
+                <h3 className="text-sm font-semibold text-foreground">Task details</h3>
+              </div>
+              <div className="space-y-3 pl-8">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Task title <span className="text-destructive">*</span></label>
+                  <Input
+                    placeholder="e.g. Edit reel for OSEN launch"
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    className="h-10 bg-background border-border focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Description <span className="text-muted-foreground text-xs">(optional)</span></label>
+                  <Textarea
+                    placeholder="Add context, links, or acceptance criteria..."
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    className="min-h-20 resize-none bg-background border-border focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Description</label>
-              <Textarea
-                placeholder="Add any context, links, or acceptance criteria..."
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                className="bg-input border-border/60 min-h-24 resize-none"
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Contribution Type *</label>
-                <Select
-                  value={form.contributionType}
-                  onValueChange={(value) => {
-                    const match = CONTRIBUTION_TYPES.flatMap((g) => g.items).find((i) => i.id === value)
-                    setForm((f) => ({
-                      ...f,
-                      contributionType: value,
-                      category: match ? match.category : f.category,
-                      points: match ? String(match.points) : f.points,
-                    }))
-                  }}
-                >
-                  <SelectTrigger className="bg-input border-border/60">
-                    <SelectValue placeholder="Select contribution type..." />
-                  </SelectTrigger>
-                  <SelectContent className="glass border-border/60 max-h-72">
-                    {CONTRIBUTION_TYPES.map((group) => (
-                      <div key={group.group}>
-                        <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                          {group.group}
+
+            {/* Step 2: Type & points */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">2</span>
+                <h3 className="text-sm font-semibold text-foreground">Contribution type & points</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-8">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Contribution type <span className="text-destructive">*</span></label>
+                  <Select
+                    value={form.contributionType}
+                    onValueChange={(value) => {
+                      const match = CONTRIBUTION_TYPES.flatMap((g) => g.items).find((i) => i.id === value)
+                      setForm((f) => ({
+                        ...f,
+                        contributionType: value,
+                        category: match ? match.category : f.category,
+                        points: match ? String(match.points) : f.points,
+                      }))
+                    }}
+                  >
+                    <SelectTrigger className="h-10 bg-background border-border">
+                      <SelectValue placeholder="Choose a type..." />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border max-h-72">
+                      {CONTRIBUTION_TYPES.map((group) => (
+                        <div key={group.group}>
+                          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                            {group.group}
+                          </div>
+                          {group.items.map((item) => (
+                            <SelectItem key={item.id} value={item.id} className="py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm">{item.label}</span>
+                                <span className="text-xs text-primary font-medium">{item.points} pts</span>
+                              </div>
+                            </SelectItem>
+                          ))}
                         </div>
-                        {group.items.map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm">{item.label}</span>
-                              <span className="text-[11px] text-muted-foreground">{item.points} pts</span>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </div>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Points (auto from policy)</label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={form.points}
-                  onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
-                  className="bg-input border-border/60"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  1 point = ₹50 · Monthly max per contributor: 100 pts (₹5000)
-                </p>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Points</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={form.points}
+                    onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
+                    className="h-10 bg-background border-border"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    1 pt = ₹50 · Max 100 pts/month per contributor
+                  </p>
+                </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Category</label>
-                <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v as TaskCategory }))}>
-                  <SelectTrigger className="bg-input border-border/60">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="glass border-border/60">
-                    {(['content', 'development', 'design', 'community', 'research'] as TaskCategory[]).map((c) => (
-                      <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+
+            {/* Step 3: Settings & assignee */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">3</span>
+                <h3 className="text-sm font-semibold text-foreground">Settings & assignee</h3>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Priority</label>
-                <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v as Priority }))}>
-                  <SelectTrigger className="bg-input border-border/60">
-                    <SelectValue />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-8">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Category</label>
+                  <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v as TaskCategory }))}>
+                    <SelectTrigger className="h-10 bg-background border-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border">
+                      {(['content', 'development', 'design', 'community', 'research'] as TaskCategory[]).map((c) => (
+                        <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Priority</label>
+                  <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v as Priority }))}>
+                    <SelectTrigger className="h-10 bg-background border-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border">
+                      {(['low', 'medium', 'high', 'urgent'] as Priority[]).map((p) => (
+                        <SelectItem key={p} value={p} className="capitalize">
+                          {p === 'urgent' ? 'Urgent' : p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Deadline & time <span className="text-destructive">*</span></label>
+                  <div className="flex gap-2">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="h-10 flex-1 justify-start text-left font-normal border-border">
+                          <CalendarIcon className="mr-2 size-4" />
+                          {form.deadline
+                            ? new Date(form.deadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : 'Pick date'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0 bg-card border-border" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={form.deadline ? new Date(form.deadline) : undefined}
+                          onSelect={(d) => {
+                            const datePart = d ? d.toISOString().slice(0, 10) : ''
+                            const timePart = form.deadline?.includes('T') ? form.deadline.slice(11, 16) : '23:59'
+                            setForm((f) => ({ ...f, deadline: datePart ? `${datePart}T${timePart}` : '' }))
+                          }}
+                          disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <Input
+                      type="time"
+                      value={form.deadline?.includes('T') ? form.deadline.slice(11, 16) : '23:59'}
+                      onChange={(e) => {
+                        const datePart = form.deadline?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+                        setForm((f) => ({ ...f, deadline: `${datePart}T${e.target.value}` }))
+                      }}
+                      className="h-10 w-28 bg-background border-border"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="pl-8 space-y-2">
+                <label className="text-sm font-medium text-foreground">Assign to <span className="text-destructive">*</span></label>
+                <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
+                  <SelectTrigger className="h-10 bg-background border-border">
+                    <SelectValue placeholder="Select a member..." />
                   </SelectTrigger>
-                  <SelectContent className="glass border-border/60">
-                    {(['low', 'medium', 'high', 'urgent'] as Priority[]).map((p) => (
-                      <SelectItem key={p} value={p} className="capitalize">
-                        {p === 'urgent' ? 'Urgent (priority)' : p}
+                  <SelectContent className="bg-card border-border">
+                    {members.map((m) => (
+                      <SelectItem key={m._id} value={m._id} className="py-2">
+                        <div className="flex items-center gap-2">
+                          <AvatarCircle initials={m.avatar || m.name?.slice(0, 2) || '?'} size="sm" />
+                          <span>{m.name}</span>
+                        </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Deadline *</label>
-                <Input type="date" value={form.deadline}
-                  onChange={(e) => setForm((f) => ({ ...f, deadline: e.target.value }))}
-                  className="bg-input border-border/60" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Assign To *</label>
-              <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
-                <SelectTrigger className="bg-input border-border/60">
-                  <SelectValue placeholder="Select a member..." />
-                </SelectTrigger>
-                <SelectContent className="glass border-border/60">
-                  {members.map((m) => (
-                  <SelectItem key={m._id} value={m._id}>
-                      <div className="flex items-center gap-2">
-                      <AvatarCircle initials={m.avatar || m.name?.slice(0, 2) || '?'} size="sm" />
-                      {m.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button
-              onClick={handleCreate}
-              className="bg-primary text-primary-foreground gap-1.5"
-              disabled={!form.title || !form.assignedTo || !form.deadline || !form.contributionType}
-            >
-              <Plus className="size-3.5" /> Create Task
-            </Button>
-          </DialogFooter>
+
+          {/* Footer with solid background */}
+          <div className="border-t border-border bg-muted/30 px-6 py-4 flex items-center justify-between gap-4">
+            <p className="text-xs text-muted-foreground">
+              {!form.title || !form.assignedTo || !form.deadline || !form.contributionType
+                ? 'Fill in all required fields (*) to create'
+                : 'Ready to create'}
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setShowCreate(false)} className="border-border">
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreate}
+                className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
+                disabled={!form.title || !form.assignedTo || !form.deadline || !form.contributionType}
+              >
+                <Plus className="size-4" /> Create Task
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -725,7 +815,7 @@ export default function AdminPage() {
             </div>
             <DialogFooter className="gap-2">
               {viewTask.status === 'submitted' && (
-                <Button onClick={() => handleApprove(viewTask.id)} className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5">
+                <Button onClick={() => handleApprove((viewTask as any)._id ?? viewTask.id)} className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5">
                   <CheckCircle2 className="size-3.5" /> Approve
                 </Button>
               )}
