@@ -12,22 +12,28 @@ import { errorHandler } from "./middleware/errorHandler";
 const app = express();
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:3000";
 
-// Allow localhost and 127.0.0.1 on any port for local dev (avoids "Failed to fetch" from CORS)
-const corsOrigin = process.env.NODE_ENV === "production"
-  ? CLIENT_ORIGIN
-  : (origin: string | undefined, cb: (err: Error | null, allow?: boolean | string) => void) => {
-      const allowed = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-      cb(null, allowed ? origin ?? true : false);
-    };
+// CORS: allow frontend origin. In production, use CLIENT_ORIGIN env or allow known Vercel frontend.
+const allowedOrigins = process.env.CLIENT_ORIGIN
+  ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim())
+  : process.env.NODE_ENV === "production"
+    ? ["https://osencontributorhub-frontend.vercel.app"]
+    : ["http://localhost:3000", "http://127.0.0.1:3000"];
 
-app.use(
-  cors({
-    origin: corsOrigin,
-    credentials: true,
-  })
-);
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))
+      return cb(null, true);
+    cb(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(morgan("dev"));
 

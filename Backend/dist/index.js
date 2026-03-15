@@ -15,20 +15,36 @@ const public_1 = require("./routes/public");
 const errorHandler_1 = require("./middleware/errorHandler");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:3000";
-// Allow localhost and 127.0.0.1 on any port for local dev (avoids "Failed to fetch" from CORS)
-const corsOrigin = process.env.NODE_ENV === "production"
-    ? CLIENT_ORIGIN
-    : (origin, cb) => {
-        const allowed = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-        cb(null, allowed ? origin ?? true : false);
-    };
-app.use((0, cors_1.default)({
-    origin: corsOrigin,
+// CORS: allow frontend origin. In production, use CLIENT_ORIGIN env or allow known Vercel frontend.
+const allowedOrigins = process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim())
+    : process.env.NODE_ENV === "production"
+        ? ["https://osencontributorhub-frontend.vercel.app"]
+        : ["http://localhost:3000", "http://127.0.0.1:3000"];
+const corsOptions = {
+    origin: (origin, cb) => {
+        if (!origin)
+            return cb(null, true);
+        if (allowedOrigins.includes(origin))
+            return cb(null, true);
+        if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))
+            return cb(null, true);
+        cb(null, false);
+    },
     credentials: true,
-}));
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+};
+app.use((0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
 app.use((0, morgan_1.default)("dev"));
+// Root and /api - so "Cannot GET /" doesn't show on Vercel or direct visits
+app.get("/", (_req, res) => {
+    res.json({ status: "ok", message: "OSEN Contributor Hub API", docs: "/api/health" });
+});
+app.get("/api", (_req, res) => {
+    res.json({ status: "ok", message: "OSEN Contributor Hub API", health: "/api/health" });
+});
 app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", message: "Backend is running" });
 });
