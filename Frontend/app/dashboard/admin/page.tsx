@@ -25,10 +25,15 @@ import {
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useApp } from '@/lib/app-context'
+import { TaskComments } from '@/components/task-comments'
 import {
   Task,
   TaskCategory,
   Priority,
+  PAYOUT_TIERS,
+  MIN_POINTS_FOR_PAYOUT,
+  MAX_PAYOUT_INR,
+  MONTHLY_POINT_CAP,
 } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -386,6 +391,7 @@ export default function AdminPage() {
                         <SelectItem value="intern">Intern</SelectItem>
                         <SelectItem value="associate">Associate</SelectItem>
                         <SelectItem value="lead">Lead</SelectItem>
+                        <SelectItem value="finance">Finance</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
                       </SelectContent>
                     </Select>
@@ -566,7 +572,7 @@ export default function AdminPage() {
                     className="h-10 bg-background border-border"
                   />
                   <p className="text-xs text-muted-foreground">
-                    1 pt = ₹50 · Max 100 pts/month per contributor
+                    Payout by monthly points tier (10+ pts) · Cap 100 pts = ₹{MAX_PAYOUT_INR}
                   </p>
                 </div>
               </div>
@@ -717,22 +723,25 @@ export default function AdminPage() {
                   <span>{(viewTask as any).assignedTo?.name ?? '—'}</span>
                 </div>
               </div>
-              <div className="rounded-xl border border-border/50 bg-background/40 p-3 text-xs space-y-1">
-                <div className="font-semibold">Payout Preview</div>
+              <div className="rounded-xl border border-border/50 bg-background/40 p-3 text-xs space-y-2">
+                <div className="font-semibold">Payout (tiered by monthly points)</div>
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Point value</span>
-                  <span>1 pt = ₹50</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Task points</span>
+                  <span className="text-muted-foreground">This task</span>
                   <span>{viewTask.points} pts</span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Estimated amount</span>
-                  <span className="font-semibold text-primary">₹{viewTask.points * 50}</span>
+                <p className="text-[10px] text-muted-foreground">
+                  Payout is by <strong>total monthly points</strong>. Min {MIN_POINTS_FOR_PAYOUT} pts to qualify.
+                </p>
+                <div className="space-y-0.5 text-[10px]">
+                  {PAYOUT_TIERS.map((t) => (
+                    <div key={t.min} className="flex justify-between">
+                      <span className="text-muted-foreground">{t.min === t.max ? t.min : `${t.min}-${t.max}`} pts</span>
+                      <span className="font-medium text-primary">₹{t.amount}</span>
+                    </div>
+                  ))}
                 </div>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  Final monthly payout is capped at 100 points (₹5000) across all tasks as per OSEN policy.
+                  Cap: {MONTHLY_POINT_CAP} pts = ₹{MAX_PAYOUT_INR} as per OSEN policy.
                 </p>
               </div>
               {viewTask.submission && (
@@ -812,6 +821,9 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
+              <div className="glass rounded-xl border border-border/50 p-4">
+                <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} />
+              </div>
             </div>
             <DialogFooter className="gap-2">
               {viewTask.status === 'submitted' && (

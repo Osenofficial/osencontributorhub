@@ -32,7 +32,7 @@ export type AuthUser = {
   id: string
   name: string
   email: string
-  role: 'admin' | 'lead' | 'associate' | 'intern'
+  role: 'admin' | 'lead' | 'associate' | 'intern' | 'finance'
   status?: 'pending' | 'active' | 'rejected' | 'suspended'
   avatar?: string
   points?: number

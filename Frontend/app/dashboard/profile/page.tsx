@@ -8,7 +8,7 @@ import { BadgeChip } from '@/components/badge-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { Progress } from '@/components/ui/progress'
 import { useApp } from '@/lib/app-context'
-import { MONTHLY_POINT_CAP, POINT_VALUE_INR, BADGES } from '@/lib/data'
+import { MONTHLY_POINT_CAP, getPayoutForPoints, BADGES } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -69,7 +69,12 @@ export default function ProfilePage() {
             <div className="flex flex-col items-center gap-1 glass rounded-xl border p-4 shrink-0 text-center">
               <div className="text-3xl font-bold neon-text-purple">{currentUser?.points ?? 0}</div>
               <div className="text-xs text-muted-foreground">total points</div>
-              <div className="text-sm font-medium text-green-400 mt-1">≈ ₹{(currentUser?.points ?? 0) * POINT_VALUE_INR}</div>
+              <div className="text-sm font-medium text-green-400 mt-1">
+                {(() => {
+                  const { amount, tierLabel } = getPayoutForPoints(currentUser?.points ?? 0)
+                  return amount > 0 ? `Payout: ₹${amount} (${tierLabel})` : tierLabel
+                })()}
+              </div>
             </div>
           </div>
         </div>

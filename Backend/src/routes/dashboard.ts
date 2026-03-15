@@ -3,6 +3,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { Task } from "../models/Task";
 import { Notification } from "../models/Notification";
 import { User } from "../models/User";
+import { Comment } from "../models/Comment";
+import { Invoice } from "../models/Invoice";
 
 export const dashboardRouter = Router();
 
@@ -166,6 +168,87 @@ dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
   }
 });
 
+// Task comments: assignee, createdBy, or admin/lead can view and add
+async function canAccessTaskComments(userId: any, userRole: string, task: any): Promise<boolean> {
+  if (["admin", "lead"].includes(userRole)) return true;
+  const assigneeId = task.assignedTo?._id?.toString() ?? task.assignedTo?.toString();
+  const createdById = task.createdBy?._id?.toString() ?? task.createdBy?.toString();
+  const uid = userId.toString();
+  return uid === assigneeId || uid === createdById;
+}
+
+dashboardRouter.get("/tasks/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email");
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    const canAccess = await canAccessTaskComments(req.user!._id, req.user!.role, task);
+    if (!canAccess) {
+      return res.status(403).json({ message: "You do not have access to this task" });
+    }
+    const comments = await Comment.find({ task: task._id })
+      .populate("author", "name email avatar")
+      .sort({ createdAt: 1 });
+    res.json(comments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.post("/tasks/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const { body } = req.body;
+    if (!body || typeof body !== "string" || !body.trim()) {
+      return res.status(400).json({ message: "Comment body is required" });
+    }
+    const task = await Task.findById(req.params.id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email");
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    const canAccess = await canAccessTaskComments(req.user!._id, req.user!.role, task);
+    if (!canAccess) {
+      return res.status(403).json({ message: "You do not have access to this task" });
+    }
+    const comment = await Comment.create({
+      task: task._id,
+      author: req.user!._id,
+      body: body.trim().slice(0, 2000),
+    });
+    const populated = await Comment.findById(comment._id).populate("author", "name email avatar");
+
+    // Notify the other party: if assignee commented, notify createdBy; if admin/lead or createdBy commented, notify assignee
+    const assigneeId = (task.assignedTo as any)?._id ?? task.assignedTo;
+    const createdById = (task.createdBy as any)?._id ?? task.createdBy;
+    const currentUserId = req.user!._id.toString();
+    const assigneeIdStr = assigneeId?.toString();
+    const createdByIdStr = createdById?.toString();
+    const authorName = req.user!.name || "Someone";
+
+    if (currentUserId === assigneeIdStr && createdByIdStr && createdByIdStr !== assigneeIdStr) {
+      await Notification.create({
+        user: createdById,
+        title: "New comment on task",
+        message: `${authorName} commented on "${task.title}"`,
+      });
+    } else if (assigneeIdStr && assigneeIdStr !== currentUserId) {
+      await Notification.create({
+        user: assigneeId,
+        title: "New comment on task",
+        message: `${authorName} commented on "${task.title}"`,
+      });
+    }
+
+    res.status(201).json(populated);
+  } catch (err) {
+    next(err);
+  }
+});
+
 dashboardRouter.get("/notifications", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
@@ -267,7 +350,7 @@ dashboardRouter.get("/leaderboard", async (_req: AuthRequest, res, next) => {
   }
 });
 
-// Contribution report for a user in a date range
+// Contribution report for a user in a date range (only admin/lead can query other users)
 dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
   try {
     const { q, from, to } = req.query as { q?: string; from?: string; to?: string };
@@ -275,6 +358,9 @@ dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
     let targetUser = req.user!;
 
     if (q) {
+      if (req.user!.role !== "admin" && req.user!.role !== "lead") {
+        return res.status(403).json({ message: "Only admin or lead can view other users' reports" });
+      }
       const query = q.trim();
       const user = await User.findOne({
         $or: [{ email: query.toLowerCase() }, { name: new RegExp(query, "i") }],
@@ -329,6 +415,145 @@ dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
       },
       tasks,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----- Invoices (Travel Reimbursement) -----
+const INVOICE_MAX_AMOUNT = 1000;
+
+function canManageInvoices(role: string): boolean {
+  return role === "admin" || role === "finance";
+}
+
+dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const body = req.body;
+
+    const totalAmountClaimed = Math.min(
+      INVOICE_MAX_AMOUNT,
+      Math.max(0, parseInt(String(body.totalAmountClaimed), 10) || 0)
+    );
+    if (totalAmountClaimed > INVOICE_MAX_AMOUNT) {
+      return res.status(400).json({ message: `Total amount cannot exceed ₹${INVOICE_MAX_AMOUNT}` });
+    }
+
+    const invoice = await Invoice.create({
+      submittedBy: userId,
+      fullName: (body.fullName || "").trim() || req.user!.name,
+      email: (body.email || "").trim().toLowerCase() || req.user!.email,
+      phone: (body.phone || "").trim(),
+      osenRole: body.osenRole || "evangelist",
+      eventName: (body.eventName || "").trim(),
+      eventDate: body.eventDate ? new Date(body.eventDate) : new Date(),
+      eventPreApproved: !!body.eventPreApproved,
+      roleAtEvent: (body.roleAtEvent || "").trim(),
+      totalAmountClaimed,
+      budgetBreakdown: (body.budgetBreakdown || "").trim(),
+      billsDriveLink: (body.billsDriveLink || "").trim(),
+      paymentMethod: body.paymentMethod || "upi",
+      upiId: body.paymentMethod === "upi" ? (body.upiId || "").trim() : undefined,
+      bankAccountHolderName:
+        body.paymentMethod === "bank_transfer" ? (body.bankAccountHolderName || "").trim() : undefined,
+      bankAccountNumber:
+        body.paymentMethod === "bank_transfer" ? (body.bankAccountNumber || "").trim() : undefined,
+      bankIfscCode:
+        body.paymentMethod === "bank_transfer" ? (body.bankIfscCode || "").trim() : undefined,
+      notes: (body.notes || "").trim() || undefined,
+      confirmationChecked: !!body.confirmationChecked,
+    });
+
+    const financeUsers = await User.find({ role: "finance" }).select("_id");
+    const adminUsers = await User.find({ role: "admin" }).select("_id");
+    const notifyIds = [...new Set([...financeUsers.map((u) => u._id), ...adminUsers.map((u) => u._id)])];
+    for (const id of notifyIds) {
+      await Notification.create({
+        user: id,
+        title: "New travel reimbursement submitted",
+        message: `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`,
+      });
+    }
+
+    res.status(201).json(invoice);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/invoices", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const role = req.user!.role;
+
+    if (canManageInvoices(role)) {
+      const status = (req.query.status as string) || undefined;
+      const filter = status ? { status } : {};
+      const invoices = await Invoice.find(filter)
+        .populate("submittedBy", "name email")
+        .sort({ createdAt: -1 });
+      return res.json(invoices);
+    }
+
+    const invoices = await Invoice.find({ submittedBy: userId }).sort({ createdAt: -1 });
+    res.json(invoices);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/invoices/:id", async (req: AuthRequest, res, next) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id).populate("submittedBy", "name email");
+    if (!invoice) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+    const userId = req.user!._id.toString();
+    const isOwner = invoice.submittedBy._id.toString() === userId;
+    const canManage = canManageInvoices(req.user!.role);
+    if (!isOwner && !canManage) {
+      return res.status(403).json({ message: "You do not have access to this invoice" });
+    }
+    res.json(invoice);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
+  try {
+    if (!canManageInvoices(req.user!.role)) {
+      return res.status(403).json({ message: "Only admin or finance can approve or reject invoices" });
+    }
+    const invoice = await Invoice.findById(req.params.id).populate("submittedBy", "name email");
+    if (!invoice) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+    const { status, reviewNotes } = req.body;
+    if (!status || !["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ message: "status must be approved or rejected" });
+    }
+    invoice.status = status;
+    invoice.reviewedBy = req.user!._id;
+    invoice.reviewedAt = new Date();
+    if (reviewNotes != null) invoice.reviewNotes = String(reviewNotes).trim();
+    await invoice.save();
+
+    await Notification.create({
+      user: invoice.submittedBy._id,
+      title:
+        status === "approved"
+          ? "Travel reimbursement approved"
+          : "Travel reimbursement not approved",
+      message:
+        status === "approved"
+          ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) has been approved.`
+          : `Your reimbursement for "${invoice.eventName}" was not approved.${invoice.reviewNotes ? ` Notes: ${invoice.reviewNotes}` : ""}`,
+    });
+
+    const updated = await Invoice.findById(invoice._id).populate("submittedBy", "name email");
+    res.json(updated);
   } catch (err) {
     next(err);
   }

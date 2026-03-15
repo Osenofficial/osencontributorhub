@@ -96,8 +96,8 @@ authRouter.post("/login", async (req, res, next) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Only enforce approval workflow for non-admins
-    if (user.role !== "admin") {
+    // Only enforce approval workflow for non-admins and non-finance (finance can log in to handle invoices)
+    if (user.role !== "admin" && user.role !== "finance") {
       if (user.status === "pending") {
         return res.status(403).json({ message: "Your account is pending approval by an admin." });
       }

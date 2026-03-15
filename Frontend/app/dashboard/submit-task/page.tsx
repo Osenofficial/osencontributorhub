@@ -183,7 +183,7 @@ export default function SubmitTaskPage() {
                   onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
                   className="bg-background border-border"
                 />
-                <p className="text-xs text-muted-foreground">1 pt = ₹50 · Max 100 pts/month</p>
+                <p className="text-xs text-muted-foreground">Payout by monthly points tier (min 10 pts) · Cap 100 pts = ₹5000</p>
               </div>
             </div>
           </div>

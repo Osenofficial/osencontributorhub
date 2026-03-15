@@ -7,7 +7,7 @@ import { AvatarCircle } from '@/components/avatar-circle'
 import { BadgeChip } from '@/components/badge-chip'
 import { Progress } from '@/components/ui/progress'
 import { useApp } from '@/lib/app-context'
-import { MONTHLY_POINT_CAP, POINT_VALUE_INR } from '@/lib/data'
+import { MONTHLY_POINT_CAP, PAYOUT_TIERS, MAX_PAYOUT_INR } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -138,23 +138,19 @@ export default function LeaderboardPage() {
           </div>
         </div>
 
-        {/* Points guide */}
+        {/* Payout tiers */}
         <div className="glass rounded-2xl border border-border/50 p-5">
-          <h3 className="font-semibold mb-3 text-sm">Points System</h3>
-          <div className="grid gap-3 sm:grid-cols-3 text-center">
-            <div className="rounded-xl bg-muted/30 p-4">
-              <div className="text-2xl font-bold neon-text-purple mb-1">1 pt</div>
-              <div className="text-xs text-muted-foreground">= ₹{POINT_VALUE_INR} value</div>
-            </div>
-            <div className="rounded-xl bg-muted/30 p-4">
-              <div className="text-2xl font-bold neon-text-cyan mb-1">{MONTHLY_POINT_CAP} pts</div>
-              <div className="text-xs text-muted-foreground">Monthly cap</div>
-            </div>
-            <div className="rounded-xl bg-muted/30 p-4">
-              <div className="text-2xl font-bold text-green-400 mb-1">₹{MONTHLY_POINT_CAP * POINT_VALUE_INR}</div>
-              <div className="text-xs text-muted-foreground">Max monthly value</div>
-            </div>
+          <h3 className="font-semibold mb-3 text-sm">Monthly Payout (tiered)</h3>
+          <p className="text-xs text-muted-foreground mb-3">Min 10 pts to qualify. Payout by total monthly points.</p>
+          <div className="space-y-1.5 text-sm">
+            {PAYOUT_TIERS.map((t) => (
+              <div key={t.min} className="flex justify-between items-center rounded-lg bg-muted/30 px-3 py-2">
+                <span className="font-medium">{t.min === t.max ? t.min : `${t.min}-${t.max}`} pts</span>
+                <span className="font-bold text-green-400">₹{t.amount}</span>
+              </div>
+            ))}
           </div>
+          <p className="text-xs text-muted-foreground mt-3">Cap: {MONTHLY_POINT_CAP} pts = ₹{MAX_PAYOUT_INR}</p>
         </div>
       </div>
     </div>

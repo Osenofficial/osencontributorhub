@@ -13,6 +13,7 @@ import {
   Star,
   CalendarRange,
   Send,
+  Receipt,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -27,6 +28,14 @@ const NAV_ITEMS = [
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
   { href: '/dashboard/report', label: 'Contribution Report', icon: CalendarRange },
+  { href: '/dashboard/invoices', label: 'Submit Invoices', icon: Receipt },
+]
+
+const NAV_ITEMS_FINANCE = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dashboard/invoices', label: 'Submit Invoices', icon: Receipt },
+  { href: '/dashboard/profile', label: 'Profile', icon: User },
+  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
 ]
 
 const ADMIN_NAV_ITEMS = [
@@ -59,7 +68,7 @@ export function DashboardSidebar() {
 
       {/* Nav */}
       <nav className="flex-1 space-y-1">
-        {NAV_ITEMS.map((item) => {
+        {(currentUser?.role === 'finance' ? NAV_ITEMS_FINANCE : NAV_ITEMS).map((item) => {
           const active = pathname === item.href
           return (
             <Link
@@ -83,7 +92,7 @@ export function DashboardSidebar() {
           )
         })}
 
-        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && (
+        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && currentUser?.role !== 'finance' && (
           <Link
             href="/dashboard/submit-task"
             className={cn(
@@ -98,7 +107,7 @@ export function DashboardSidebar() {
           </Link>
         )}
 
-        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && currentUser?.role !== 'finance' && (
           <>
             <div className="mt-4 mb-2 px-3">
               <div className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-semibold">Admin</div>
@@ -134,6 +143,8 @@ export function DashboardSidebar() {
             <div className="text-xs text-muted-foreground flex items-center gap-1">
               {currentUser.role === 'admin' ? (
                 <><Shield className="size-3 text-primary" /> Admin</>
+              ) : currentUser.role === 'finance' ? (
+                <><Receipt className="size-3 text-primary" /> Finance</>
               ) : (
                 <><Star className="size-3 text-yellow-400" /> {currentUser.points} pts</>
               )}

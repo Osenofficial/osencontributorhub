@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Clock, Trophy, Zap, ArrowRight, Activity, Play, Send, UserPlus } from 'lucide-react'
+import { CheckCircle2, Clock, Trophy, Zap, ArrowRight, Activity, Play, Send, UserPlus, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { useApp } from '@/lib/app-context'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
@@ -27,10 +27,11 @@ import {
 } from '@/components/ui/select'
 import {
   MONTHLY_POINT_CAP,
-  POINT_VALUE_INR,
+  getPayoutForPoints,
 } from '@/lib/data'
 import { getContributionLabel } from '@/lib/contribution-types'
 import { apiFetch } from '@/lib/api'
+import { TaskComments } from '@/components/task-comments'
 import { cn } from '@/lib/utils'
 
 function StatCard({
@@ -72,6 +73,7 @@ export default function DashboardPage() {
   const [team, setTeam] = useState<any[]>([])
   const [submitTarget, setSubmitTarget] = useState<any | null>(null)
   const [reassignTarget, setReassignTarget] = useState<any | null>(null)
+  const [viewTask, setViewTask] = useState<any | null>(null)
   const [reassignTo, setReassignTo] = useState('')
   const [submission, setSubmission] = useState({ githubLink: '', notionLink: '', googleDoc: '', comments: '' })
 
@@ -170,7 +172,11 @@ export default function DashboardPage() {
           <StatCard
             title="Total Points"
             value={currentUser?.points ?? 0}
-            sub={`≈ ₹${currentUser.points * POINT_VALUE_INR} value`}
+            sub={(() => {
+              const pts = currentUser?.points ?? 0
+              const { amount, tierLabel } = getPayoutForPoints(pts)
+              return amount > 0 ? `Payout: ₹${amount} (${tierLabel})` : tierLabel
+            })()}
             icon={Zap}
             color="text-primary"
             glow="border-primary/20"
@@ -280,6 +286,9 @@ export default function DashboardPage() {
                             <UserPlus className="size-3" /> Reassign
                           </Button>
                         )}
+                        <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => setViewTask(task)}>
+                          <MessageSquare className="size-3" /> Comments
+                        </Button>
                       </div>
                     </div>
                   )
@@ -353,6 +362,42 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* View Task & Comments Dialog */}
+      <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
+        <DialogContent className="max-w-lg border-border bg-card shadow-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{viewTask?.title}</DialogTitle>
+            <p className="text-sm text-muted-foreground leading-relaxed">{viewTask?.description}</p>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge value={viewTask?.category} type="category" />
+              <StatusBadge value={viewTask?.status} type="status" />
+              <span className="text-sm font-mono text-primary font-semibold">{viewTask?.points} pts</span>
+            </div>
+            {viewTask?.submission && (
+              <div className="rounded-lg border border-border/50 p-3 text-xs space-y-1">
+                <div className="font-semibold">Submission</div>
+                {viewTask.submission.githubLink && (
+                  <a href={viewTask.submission.githubLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
+                    {viewTask.submission.githubLink}
+                  </a>
+                )}
+                {viewTask.submission.notionLink && (
+                  <a href={viewTask.submission.notionLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
+                    {viewTask.submission.notionLink}
+                  </a>
+                )}
+                {viewTask.submission.comments && <p className="text-muted-foreground whitespace-pre-wrap">{viewTask.submission.comments}</p>}
+              </div>
+            )}
+            <div className="border-t border-border/50 pt-4">
+              <TaskComments taskId={viewTask?._id} />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Submit Work Dialog */}
       <Dialog open={!!submitTarget} onOpenChange={(o) => !o && setSubmitTarget(null)}>

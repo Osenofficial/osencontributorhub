@@ -1,7 +1,7 @@
 // Types and constants for OSEN Contributor Hub
 // All dynamic data comes from the API
 
-export type Role = 'admin' | 'lead' | 'associate' | 'intern'
+export type Role = 'admin' | 'lead' | 'associate' | 'intern' | 'finance'
 export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'completed'
 export type TaskCategory = 'content' | 'development' | 'design' | 'community' | 'research'
 export type Priority = 'low' | 'medium' | 'high' | 'urgent'
@@ -110,4 +110,31 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
 }
 
 export const MONTHLY_POINT_CAP = 100
+
+/** Tiered payout by monthly points (min 10 pts to qualify). Cap 100 pts = ₹5000. */
+export const PAYOUT_TIERS: { min: number; max: number; amount: number }[] = [
+  { min: 10, max: 20, amount: 500 },
+  { min: 21, max: 40, amount: 1000 },
+  { min: 41, max: 60, amount: 2000 },
+  { min: 61, max: 80, amount: 3000 },
+  { min: 81, max: 99, amount: 4000 },
+  { min: 100, max: 100, amount: 5000 },
+]
+
+export const MIN_POINTS_FOR_PAYOUT = 10
+export const MAX_PAYOUT_INR = 5000
+
+/** Get payout amount and tier label for a given monthly points total. Below 10 pts = no payout. */
+export function getPayoutForPoints(points: number): { amount: number; tierLabel: string } {
+  if (points < MIN_POINTS_FOR_PAYOUT) {
+    return { amount: 0, tierLabel: `Below ${MIN_POINTS_FOR_PAYOUT} pts (no payout)` }
+  }
+  const pts = Math.min(points, MONTHLY_POINT_CAP)
+  const tier = PAYOUT_TIERS.find((t) => pts >= t.min && pts <= t.max)
+  if (!tier) return { amount: 0, tierLabel: '' }
+  const label = tier.min === tier.max ? `${tier.min} pts` : `${tier.min}-${tier.max} pts`
+  return { amount: tier.amount, tierLabel: label }
+}
+
+/** @deprecated Use tiered getPayoutForPoints; kept for any legacy display. */
 export const POINT_VALUE_INR = 50

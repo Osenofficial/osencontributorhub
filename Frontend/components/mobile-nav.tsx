@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, ClipboardList, Trophy, User, Bell, Shield, Send } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, Trophy, User, Bell, Shield, Send, Receipt } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
 import { useEffect, useState } from 'react'
@@ -14,6 +14,7 @@ const NAV = [
   { href: '/dashboard/leaderboard', label: 'Board', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
 ]
 
 const SUBMIT_TASK_NAV = { href: '/dashboard/submit-task', label: 'Submit', icon: Send }
@@ -51,7 +52,7 @@ export function MobileNav() {
             </Link>
           )
         })}
-        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && (
+        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && currentUser?.role !== 'finance' && (
           <Link
             href={SUBMIT_TASK_NAV.href}
             className={cn(
@@ -63,7 +64,7 @@ export function MobileNav() {
             <span className="text-[10px] font-medium">{SUBMIT_TASK_NAV.label}</span>
           </Link>
         )}
-        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && currentUser?.role !== 'finance' && (
           <Link
             href="/dashboard/admin"
             className={cn(

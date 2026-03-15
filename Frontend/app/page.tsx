@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 const HOW_IT_WORKS = [
   { icon: Users, title: 'Join the Community', description: 'Create your OSEN profile and become part of a thriving developer community.', color: 'text-neon-purple', glow: 'neon-glow-purple', border: 'border-primary/30' },
   { icon: ClipboardList, title: 'Pick Up Tasks', description: 'Browse and get assigned tasks across development, design, content, and research.', color: 'text-neon-cyan', glow: 'neon-glow-cyan', border: 'border-accent/30' },
-  { icon: Trophy, title: 'Earn Points & Rewards', description: 'Complete tasks to earn points. Each point equals ₹50 in real value.', color: 'text-yellow-400', glow: '', border: 'border-yellow-400/30' },
+  { icon: Trophy, title: 'Earn Points & Rewards', description: 'Complete tasks to earn points. Payout by monthly tier (10+ pts to qualify, up to ₹5000/month).', color: 'text-yellow-400', glow: '', border: 'border-yellow-400/30' },
 ]
 
 const CONTRIBUTION_TYPES = [

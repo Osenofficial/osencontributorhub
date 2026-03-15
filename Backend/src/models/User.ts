@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-export type UserRole = "admin" | "lead" | "associate" | "intern";
+export type UserRole = "admin" | "lead" | "associate" | "intern" | "finance";
 
 export interface IUser extends Document {
   name: string;
@@ -33,7 +33,7 @@ const UserSchema = new Schema<IUser>(
       index: true,
     },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ["admin", "lead", "associate", "intern"], default: "intern", index: true },
+    role: { type: String, enum: ["admin", "lead", "associate", "intern", "finance"], default: "intern", index: true },
     avatar: { type: String, default: "" },
     points: { type: Number, default: 0, min: 0 },
     tasksCompleted: { type: Number, default: 0, min: 0 },
