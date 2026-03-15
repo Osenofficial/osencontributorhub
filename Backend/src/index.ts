@@ -31,6 +31,13 @@ app.use(
 app.use(express.json());
 app.use(morgan("dev"));
 
+// Root and /api - so "Cannot GET /" doesn't show on Vercel or direct visits
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", message: "OSEN Contributor Hub API", docs: "/api/health" });
+});
+app.get("/api", (_req, res) => {
+  res.json({ status: "ok", message: "OSEN Contributor Hub API", health: "/api/health" });
+});
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", message: "Backend is running" });
 });
