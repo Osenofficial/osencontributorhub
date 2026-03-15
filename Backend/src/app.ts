@@ -10,12 +10,16 @@ import { errorHandler } from "./middleware/errorHandler";
 
 const app = express();
 
-// CORS: allow frontend origin. In production, use CLIENT_ORIGIN env or allow known Vercel frontend.
-const allowedOrigins = process.env.CLIENT_ORIGIN
-  ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim())
-  : process.env.NODE_ENV === "production"
-    ? ["https://osencontributorhub-frontend.vercel.app"]
-    : ["http://localhost:3000", "http://127.0.0.1:3000"];
+// CORS: CLIENT_ORIGIN env (comma-separated) + hardcoded fallbacks so it works on Vercel even if env is missing
+const fromEnv = process.env.CLIENT_ORIGIN
+  ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean)
+  : [];
+const allowedOrigins = [
+  ...fromEnv,
+  "https://osencontributorhub-frontend.vercel.app",
+  "https://osenhub.vercel.app",
+  ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000", "http://127.0.0.1:3000"] : []),
+];
 
 function isOriginAllowed(origin: string | undefined): boolean {
   if (!origin) return true;
@@ -28,9 +32,10 @@ function isOriginAllowed(origin: string | undefined): boolean {
 
 // Handle CORS and preflight first so headers are always set (critical for Vercel serverless)
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (isOriginAllowed(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin || allowedOrigins[0] || "*");
+  const origin = (req.headers.origin || "").trim();
+  const allowOrigin = origin && isOriginAllowed(origin) ? origin : allowedOrigins[0];
+  if (allowOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowOrigin);
   }
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
