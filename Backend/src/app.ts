@@ -46,12 +46,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors({
-  origin: (origin, cb) => cb(null, isOriginAllowed(origin)),
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
+app.use(cors(
+));
 app.use(express.json());
 app.use(morgan("dev"));
 
