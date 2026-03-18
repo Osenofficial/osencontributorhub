@@ -1,34 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import {
-  Receipt,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  Send,
-  ExternalLink,
-  CalendarIcon,
-} from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { CalendarIcon, CheckCircle2, Clock, ExternalLink, Receipt, Send, XCircle } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Calendar } from '@/components/ui/calendar'
 import { useApp } from '@/lib/app-context'
@@ -50,9 +30,9 @@ const PAYMENT_METHODS = [
 
 const MAX_AMOUNT = 1000
 
-type InvoiceStatus = 'pending' | 'approved' | 'rejected'
+type InvoiceStatus = 'pending_admin' | 'pending_accounts' | 'paid' | 'rejected'
 
-interface InvoiceRecord {
+type InvoiceRecord = {
   _id: string
   fullName: string
   email: string
@@ -65,16 +45,29 @@ interface InvoiceRecord {
   totalAmountClaimed: number
   budgetBreakdown: string
   billsDriveLink: string
-  paymentMethod: string
+  paymentMethod: 'upi' | 'bank_transfer'
   upiId?: string
   bankAccountHolderName?: string
   bankAccountNumber?: string
   bankIfscCode?: string
   notes?: string
   status: InvoiceStatus
-  reviewNotes?: string
-  reviewedAt?: string
-  submittedBy?: { _id: string; name: string; email: string }
+  adminReviewNotes?: string
+  accountsReviewNotes?: string
+  adminReviewedBy?: { _id?: string; name?: string; email?: string }
+  accountsReviewedBy?: { _id?: string; name?: string; email?: string }
+  adminReviewedAt?: string
+  accountsReviewedAt?: string
+  paidAt?: string
+  submittedBy?: { _id: string; name: string; email: string; role: string }
+  createdAt: string
+}
+
+type InvoiceComment = {
+  _id?: string
+  author?: { _id?: string; name?: string; email?: string; avatar?: string; role?: string }
+  role: string
+  body: string
   createdAt: string
 }
 
@@ -100,20 +93,38 @@ const defaultForm = {
 }
 
 export default function InvoicesPage() {
-  const { currentUser } = useApp()
-  const [invoices, setInvoices] = useState<InvoiceRecord[]>([])
-  const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState(defaultForm)
-  const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
-  const [viewTab, setViewTab] = useState<'form' | 'mine' | 'review'>('form')
-  const [detailInvoice, setDetailInvoice] = useState<InvoiceRecord | null>(null)
-  const [reviewStatus, setReviewStatus] = useState<'approved' | 'rejected' | null>(null)
-  const [reviewNotes, setReviewNotes] = useState('')
+  const { currentUser, refreshUser } = useApp()
+  const role = currentUser?.role
 
-  const isFinanceOrAdmin = currentUser?.role === 'finance' || currentUser?.role === 'admin'
+  const isAdmin = role === 'admin'
+  const isAccounts = role === 'accounts'
+  const isEvangelist = role === 'evangelist'
+
+  const [loading, setLoading] = useState(true)
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([])
+
+  const [form, setForm] = useState(defaultForm)
+  const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  const [detailInvoice, setDetailInvoice] = useState<InvoiceRecord | null>(null)
+  const [decision, setDecision] = useState<'approved' | 'rejected' | 'paid' | null>(null)
+  const [reviewNotes, setReviewNotes] = useState('')
+  const [savingDecision, setSavingDecision] = useState(false)
+
+  const [invoiceComments, setInvoiceComments] = useState<InvoiceComment[]>([])
+  const [newCommentBody, setNewCommentBody] = useState('')
+  const [savingComment, setSavingComment] = useState(false)
+
+  const title = useMemo(() => {
+    if (isAdmin) return 'Admin Invoice Review'
+    if (isAccounts) return 'Accounts Invoice Approval'
+    return 'Raise Travel Reimbursement'
+  }, [isAdmin, isAccounts])
 
   useEffect(() => {
+    if (!currentUser?.id) return
+    setLoading(true)
     apiFetch<InvoiceRecord[]>('/dashboard/invoices')
       .then(setInvoices)
       .catch(() => setInvoices([]))
@@ -121,40 +132,59 @@ export default function InvoicesPage() {
   }, [currentUser?.id])
 
   useEffect(() => {
-    if (currentUser && !form.fullName) {
-      setForm((f) => ({
-        ...f,
-        fullName: currentUser.name || '',
-        email: currentUser.email || '',
-      }))
+    if (!currentUser?.id) return
+    setForm((f) => ({
+      ...f,
+      fullName: currentUser.name || f.fullName,
+      email: currentUser.email || f.email,
+    }))
+  }, [currentUser?.id])
+
+  const pendingAdmin = invoices.filter((i) => i.status === 'pending_admin')
+  const pendingAccounts = invoices.filter((i) => i.status === 'pending_accounts')
+  const paidInvoices = invoices.filter((i) => i.status === 'paid')
+
+  const myInvoices = invoices
+
+  async function refresh() {
+    const list = await apiFetch<InvoiceRecord[]>('/dashboard/invoices')
+    setInvoices(list)
+    await refreshUser().catch(() => undefined)
+  }
+
+  async function refreshComments(invoiceId: string) {
+    try {
+      const list = await apiFetch<InvoiceComment[]>(`/dashboard/invoices/${invoiceId}/comments`)
+      setInvoiceComments(list ?? [])
+    } catch {
+      setInvoiceComments([])
     }
-  }, [currentUser])
+  }
 
-  const pendingInvoices = invoices.filter((i) => i.status === 'pending')
-  const myInvoices = isFinanceOrAdmin ? invoices : invoices
-
-  async function handleSubmitForm(e: React.FormEvent) {
+  async function handleSubmitForm(e: FormEvent) {
     e.preventDefault()
+    if (!isEvangelist) return
+
     const amount = Math.min(MAX_AMOUNT, Math.max(0, parseInt(form.totalAmountClaimed, 10) || 0))
     if (
-      !form.fullName?.trim() ||
-      !form.email?.trim() ||
-      !form.phone?.trim() ||
-      !form.eventName?.trim() ||
+      !form.fullName.trim() ||
+      !form.email.trim() ||
+      !form.phone.trim() ||
+      !form.eventName.trim() ||
       !form.eventDate ||
-      !form.roleAtEvent?.trim() ||
-      !form.budgetBreakdown?.trim() ||
-      !form.billsDriveLink?.trim() ||
+      !form.roleAtEvent.trim() ||
+      !form.budgetBreakdown.trim() ||
+      !form.billsDriveLink.trim() ||
       amount <= 0 ||
       !form.confirmationChecked
     ) {
       return
     }
-    if (form.paymentMethod === 'upi' && !form.upiId?.trim()) return
+    if (form.paymentMethod === 'upi' && !form.upiId.trim()) return
     if (form.paymentMethod === 'bank_transfer') {
-      if (!form.bankAccountHolderName?.trim() || !form.bankAccountNumber?.trim() || !form.bankIfscCode?.trim())
-        return
+      if (!form.bankAccountHolderName.trim() || !form.bankAccountNumber.trim() || !form.bankIfscCode.trim()) return
     }
+
     setSubmitting(true)
     try {
       await apiFetch('/dashboard/invoices', {
@@ -172,114 +202,162 @@ export default function InvoicesPage() {
           budgetBreakdown: form.budgetBreakdown.trim(),
           billsDriveLink: form.billsDriveLink.trim(),
           paymentMethod: form.paymentMethod,
-          upiId: form.paymentMethod === 'upi' ? form.upiId?.trim() : undefined,
-          bankAccountHolderName: form.paymentMethod === 'bank_transfer' ? form.bankAccountHolderName?.trim() : undefined,
-          bankAccountNumber: form.paymentMethod === 'bank_transfer' ? form.bankAccountNumber?.trim() : undefined,
-          bankIfscCode: form.paymentMethod === 'bank_transfer' ? form.bankIfscCode?.trim() : undefined,
-          notes: form.notes?.trim() || undefined,
+          upiId: form.paymentMethod === 'upi' ? form.upiId.trim() : undefined,
+          bankAccountHolderName:
+            form.paymentMethod === 'bank_transfer' ? form.bankAccountHolderName.trim() : undefined,
+          bankAccountNumber: form.paymentMethod === 'bank_transfer' ? form.bankAccountNumber.trim() : undefined,
+          bankIfscCode: form.paymentMethod === 'bank_transfer' ? form.bankIfscCode.trim() : undefined,
+          notes: form.notes.trim() || undefined,
           confirmationChecked: true,
         }),
       })
       setSubmitted(true)
       setForm(defaultForm)
-      const list = await apiFetch<InvoiceRecord[]>('/dashboard/invoices')
-      setInvoices(list)
-    } catch {
+      await refresh()
+    } finally {
       setSubmitting(false)
     }
-    setSubmitting(false)
-  }
-
-  async function handleApproveReject() {
-    if (!detailInvoice || !reviewStatus) return
-    try {
-      const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: reviewStatus, reviewNotes: reviewNotes.trim() || undefined }),
-      })
-      setInvoices((prev) => prev.map((i) => (i._id === updated._id ? updated : i)))
-      setDetailInvoice(null)
-      setReviewStatus(null)
-      setReviewNotes('')
-    } catch {}
   }
 
   function openDetail(inv: InvoiceRecord) {
     setDetailInvoice(inv)
-    setReviewStatus(null)
+    setDecision(null)
     setReviewNotes('')
+    setNewCommentBody('')
+    setInvoiceComments([])
+    refreshComments(inv._id).catch(() => undefined)
+  }
+
+  function canPostComment() {
+    if (!detailInvoice) return false
+    if (isAdmin && detailInvoice.status === 'pending_admin') return true
+    if (isAccounts && detailInvoice.status === 'pending_accounts') return true
+    return false
+  }
+
+  async function handleAddComment() {
+    if (!detailInvoice) return
+    if (!canPostComment()) return
+    const trimmed = newCommentBody.trim()
+    if (!trimmed) return
+    setSavingComment(true)
+    try {
+      await apiFetch(`/dashboard/invoices/${detailInvoice._id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ body: trimmed }),
+      })
+      setNewCommentBody('')
+      await refreshComments(detailInvoice._id)
+    } finally {
+      setSavingComment(false)
+    }
+  }
+
+  async function confirmDecision() {
+    if (!detailInvoice || !decision) return
+    if (role === 'admin') {
+      if (!['approved', 'rejected'].includes(decision)) return
+      setSavingDecision(true)
+      try {
+        await apiFetch(`/dashboard/invoices/${detailInvoice._id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+        })
+        setDetailInvoice(null)
+        setDecision(null)
+        setReviewNotes('')
+        await refresh()
+      } finally {
+        setSavingDecision(false)
+      }
+      return
+    }
+    if (role === 'accounts') {
+      if (!['paid', 'rejected'].includes(decision)) return
+      setSavingDecision(true)
+      try {
+        await apiFetch(`/dashboard/invoices/${detailInvoice._id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+        })
+        setDetailInvoice(null)
+        setDecision(null)
+        setReviewNotes('')
+        await refresh()
+      } finally {
+        setSavingDecision(false)
+      }
+    }
+  }
+
+  function StatusBadge({ status }: { status: InvoiceStatus }) {
+    if (status === 'paid') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 text-green-600 text-xs px-2 py-0.5">
+          <CheckCircle2 className="size-3" /> Paid
+        </span>
+      )
+    }
+    if (status === 'rejected') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 text-red-600 text-xs px-2 py-0.5">
+          <XCircle className="size-3" /> Rejected
+        </span>
+      )
+    }
+    if (status === 'pending_accounts') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 text-blue-600 text-xs px-2 py-0.5">
+          <Clock className="size-3" /> Pending Accounts
+        </span>
+      )
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 text-amber-600 text-xs px-2 py-0.5">
+        <Clock className="size-3" /> Pending Admin
+      </span>
+    )
   }
 
   return (
-    <div className="flex flex-col min-h-full">
-      <DashboardTopbar title="Submit Invoices" />
-
-      <div className="flex-1 p-6 max-w-4xl mx-auto w-full space-y-6">
-        {/* Info box */}
+    <div className="flex flex-col">
+      <DashboardTopbar title={title} />
+      <div className="p-6 max-w-4xl mx-auto w-full space-y-6">
         <div className="glass rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-2">
-          <div className="flex items-center gap-2 font-semibold text-amber-600 dark:text-amber-400">
+          <div className="flex items-center gap-2 font-semibold text-amber-600">
             <Receipt className="size-4" /> OSEN Evangelist Travel Reimbursement
           </div>
           <p className="text-sm text-muted-foreground">
             Reimbursement up to <strong>₹{MAX_AMOUNT}</strong> per event (travel + food combined). Submit within 5 days of the event.
-            Upload bills to Google Drive and share a <strong>publicly accessible link</strong> below.
           </p>
           <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
             <li>Event must be pre-approved by OSEN Core Team</li>
-            <li>Submit within 5 days of the event</li>
-            <li>Fake or edited bills will lead to immediate removal from the program</li>
+            <li>Upload bills to Google Drive and share a public link</li>
+            <li>Fake or edited bills will lead to immediate removal from the OSEN program</li>
           </ul>
-          <p className="text-xs text-muted-foreground">
-            Payment queries: osen.bills@gmail.com (CC: vikashfromosen@gmail.com)
-          </p>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-2 border-b border-border/60 pb-2">
-          <button
-            type="button"
-            onClick={() => setViewTab('form')}
-            className={cn(
-              'px-4 py-2 rounded-lg text-sm font-medium',
-              viewTab === 'form' ? 'bg-primary/15 text-primary border border-primary/20' : 'text-muted-foreground hover:bg-muted/50',
-            )}
-          >
-            New submission
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewTab('mine')}
-            className={cn(
-              'px-4 py-2 rounded-lg text-sm font-medium',
-              viewTab === 'mine' ? 'bg-primary/15 text-primary border border-primary/20' : 'text-muted-foreground hover:bg-muted/50',
-            )}
-          >
-            {isFinanceOrAdmin ? 'All submissions' : 'My submissions'} ({myInvoices.length})
-          </button>
-          {isFinanceOrAdmin && (
-            <button
-              type="button"
-              onClick={() => setViewTab('review')}
-              className={cn(
-                'px-4 py-2 rounded-lg text-sm font-medium',
-                viewTab === 'review' ? 'bg-primary/15 text-primary border border-primary/20' : 'text-muted-foreground hover:bg-muted/50',
-              )}
-            >
-              Pending review ({pendingInvoices.length})
-            </button>
-          )}
-        </div>
-
-        {viewTab === 'form' && (
+        {isEvangelist && (
           <>
             {submitted ? (
               <div className="glass rounded-xl border border-green-400/20 bg-green-400/5 p-8 text-center space-y-4">
                 <CheckCircle2 className="size-12 text-green-400 mx-auto" />
                 <h3 className="font-semibold">Submitted successfully</h3>
-                <p className="text-sm text-muted-foreground">
-                  Your reimbursement request has been submitted. Finance will review and notify you.
-                </p>
-                <Button variant="outline" onClick={() => setSubmitted(false)}>Submit another</Button>
+                <p className="text-sm text-muted-foreground">Admin will review your invoice first.</p>
+                {myInvoices.length > 0 ? (
+                  <div className="mx-auto max-w-md glass rounded-lg border border-border/40 p-3 flex flex-col gap-2 items-center">
+                    <div className="text-xs text-muted-foreground">Latest invoice status</div>
+                    <StatusBadge status={myInvoices[0].status} />
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => openDetail(myInvoices[0])}>
+                      View details
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Fetching your invoice…</p>
+                )}
+                <Button variant="outline" onClick={() => setSubmitted(false)}>
+                  Submit another
+                </Button>
               </div>
             ) : (
               <form onSubmit={handleSubmitForm} className="rounded-2xl border border-border bg-card shadow-sm p-6 sm:p-8 space-y-6">
@@ -300,12 +378,12 @@ export default function InvoicesPage() {
                       type="email"
                       value={form.email}
                       onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                      placeholder="Enter Email ID"
                       required
                       className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                     />
                   </div>
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Phone number *</label>
                   <Input
@@ -316,6 +394,7 @@ export default function InvoicesPage() {
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">OSEN Role *</label>
                   <Select value={form.osenRole} onValueChange={(v: any) => setForm((f) => ({ ...f, osenRole: v }))}>
@@ -324,11 +403,14 @@ export default function InvoicesPage() {
                     </SelectTrigger>
                     <SelectContent>
                       {OSEN_ROLES.map((r) => (
-                        <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Event name *</label>
                   <Input
@@ -339,6 +421,7 @@ export default function InvoicesPage() {
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Event date *</label>
                   <Popover>
@@ -364,14 +447,13 @@ export default function InvoicesPage() {
                       <Calendar
                         mode="single"
                         selected={form.eventDate ? new Date(form.eventDate) : undefined}
-                        onSelect={(d) =>
-                          setForm((f) => ({ ...f, eventDate: d ? d.toISOString().slice(0, 10) : '' }))
-                        }
+                        onSelect={(d) => setForm((f) => ({ ...f, eventDate: d ? d.toISOString().slice(0, 10) : '' }))}
                         initialFocus
                       />
                     </PopoverContent>
                   </Popover>
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Was this event pre-approved by OSEN Core Team? *</label>
                   <Select
@@ -387,18 +469,22 @@ export default function InvoicesPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Your role at the event *</label>
                   <Input
                     value={form.roleAtEvent}
                     onChange={(e) => setForm((f) => ({ ...f, roleAtEvent: e.target.value }))}
-                    placeholder="e.g. Speaker / Mentor / Judge / Distributed swags"
+                    placeholder="e.g. Speaker / Mentor / Judge"
                     required
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Total amount claimed (max ₹{MAX_AMOUNT}) *</label>
+                  <label className="text-sm font-medium text-foreground">
+                    Total amount claimed (max ₹{MAX_AMOUNT}) *
+                  </label>
                   <Input
                     type="number"
                     min={0}
@@ -410,6 +496,7 @@ export default function InvoicesPage() {
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Budget breakdown *</label>
                   <Input
@@ -420,11 +507,10 @@ export default function InvoicesPage() {
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Bills – Drive link *</label>
-                  <p className="text-xs text-muted-foreground">
-                    Please upload your bills to Google Drive (or similar) and provide a publicly accessible link.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Use a public, publicly accessible link.</p>
                   <Input
                     type="url"
                     value={form.billsDriveLink}
@@ -434,22 +520,26 @@ export default function InvoicesPage() {
                     className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Preferred payment method *</label>
                   <Select
                     value={form.paymentMethod}
-                    onValueChange={(v: 'upi' | 'bank_transfer') => setForm((f) => ({ ...f, paymentMethod: v }))}
+                    onValueChange={(v: any) => setForm((f) => ({ ...f, paymentMethod: v }))}
                   >
                     <SelectTrigger className="h-10 bg-background border-border text-foreground">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {PAYMENT_METHODS.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
+
                 {form.paymentMethod === 'upi' && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-foreground">UPI ID *</label>
@@ -462,6 +552,7 @@ export default function InvoicesPage() {
                     />
                   </div>
                 )}
+
                 {form.paymentMethod === 'bank_transfer' && (
                   <div className="grid gap-4 sm:grid-cols-1 space-y-2">
                     <div className="space-y-2">
@@ -487,15 +578,16 @@ export default function InvoicesPage() {
                       <Input
                         value={form.bankIfscCode}
                         onChange={(e) => setForm((f) => ({ ...f, bankIfscCode: e.target.value }))}
-                        placeholder="e.g. SBIN0001234"
                         required
+                        placeholder="e.g. SBIN0001234"
                         className="h-10 bg-background border-border text-foreground placeholder:text-muted-foreground"
                       />
                     </div>
                   </div>
                 )}
+
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Anything else you’d like to share?</label>
+                  <label className="text-sm font-medium text-foreground">Anything else you'd like to share?</label>
                   <Textarea
                     value={form.notes}
                     onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
@@ -503,6 +595,7 @@ export default function InvoicesPage() {
                     className="min-h-20 bg-background border-border text-foreground placeholder:text-muted-foreground resize-none"
                   />
                 </div>
+
                 <div className="rounded-lg border border-border bg-muted/30 p-4 flex items-start gap-3">
                   <Checkbox
                     id="confirm"
@@ -511,187 +604,310 @@ export default function InvoicesPage() {
                     className="size-5 shrink-0 mt-0.5 border-2 border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                   />
                   <label htmlFor="confirm" className="text-sm text-foreground cursor-pointer leading-snug">
-                    I confirm that all submitted bills are genuine, the expenses were for an approved OSEN event,
-                    the total does not exceed ₹{MAX_AMOUNT}, and I understand that fake submissions lead to permanent disqualification. *
+                    I confirm bills are genuine and the total does not exceed ₹{MAX_AMOUNT}. *
                   </label>
                 </div>
+
                 <Button type="submit" disabled={submitting} className="gap-2 h-10">
                   <Send className="size-4" /> Submit reimbursement
                 </Button>
               </form>
             )}
-          </>
-        )}
 
-        {viewTab === 'mine' && (
-          <div className="space-y-3">
-            {loading ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : myInvoices.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No submissions yet.</p>
-            ) : (
-              myInvoices.map((inv) => (
-                <div
-                  key={inv._id}
-                  className="glass rounded-xl border border-border/50 p-4 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="font-medium">{inv.eventName}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {new Date(inv.eventDate).toLocaleDateString('en-IN')} · ₹{inv.totalAmountClaimed}
-                      {inv.submittedBy && isFinanceOrAdmin && (
-                        <> · {inv.submittedBy.name}</>
-                      )}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={inv.status} />
-                    <Button variant="ghost" size="sm" onClick={() => openDetail(inv)}>View</Button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {viewTab === 'review' && isFinanceOrAdmin && (
-          <div className="space-y-3">
-            {pendingInvoices.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No pending invoices.</p>
-            ) : (
-              pendingInvoices.map((inv) => (
-                <div
-                  key={inv._id}
-                  className="glass rounded-xl border border-amber-500/20 p-4 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="font-medium">{inv.eventName}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {inv.fullName} · {inv.email} · ₹{inv.totalAmountClaimed}
-                    </p>
-                  </div>
-                  <Button size="sm" onClick={() => openDetail(inv)}>Review</Button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Detail / Review dialog */}
-      <Dialog open={!!detailInvoice} onOpenChange={(o) => !o && setDetailInvoice(null)}>
-        {detailInvoice && (
-          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{detailInvoice.eventName}</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-2">
-                <span className="text-muted-foreground">Name</span><span>{detailInvoice.fullName}</span>
-                <span className="text-muted-foreground">Email</span><span>{detailInvoice.email}</span>
-                <span className="text-muted-foreground">Phone</span><span>{detailInvoice.phone}</span>
-                <span className="text-muted-foreground">OSEN Role</span>
-                <span>{OSEN_ROLES.find((r) => r.value === detailInvoice.osenRole)?.label ?? detailInvoice.osenRole}</span>
-                <span className="text-muted-foreground">Event date</span>
-                <span>{new Date(detailInvoice.eventDate).toLocaleDateString('en-IN')}</span>
-                <span className="text-muted-foreground">Pre-approved</span>
-                <span>{detailInvoice.eventPreApproved ? 'Yes' : 'No'}</span>
-                <span className="text-muted-foreground">Role at event</span><span>{detailInvoice.roleAtEvent}</span>
-                <span className="text-muted-foreground">Amount</span><span className="font-semibold">₹{detailInvoice.totalAmountClaimed}</span>
-                <span className="text-muted-foreground">Breakdown</span><span>{detailInvoice.budgetBreakdown}</span>
+            <div className="glass rounded-xl border border-border/50 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">My submissions</h3>
+                <span className="text-xs text-muted-foreground">{myInvoices.length}</span>
               </div>
-              <div>
-                <span className="text-muted-foreground block mb-1">Bills link</span>
-                <a
-                  href={detailInvoice.billsDriveLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline flex items-center gap-1"
-                >
-                  {detailInvoice.billsDriveLink.slice(0, 50)}… <ExternalLink className="size-3" />
-                </a>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <span className="text-muted-foreground">Payment</span>
-                <span>{detailInvoice.paymentMethod === 'upi' ? `UPI: ${detailInvoice.upiId}` : 'Bank transfer'}</span>
-                {detailInvoice.paymentMethod === 'bank_transfer' && (
-                  <>
-                    <span className="text-muted-foreground">Account</span>
-                    <span>{detailInvoice.bankAccountHolderName} · {detailInvoice.bankAccountNumber} · {detailInvoice.bankIfscCode}</span>
-                  </>
-                )}
-              </div>
-              {detailInvoice.notes && (
-                <div>
-                  <span className="text-muted-foreground block mb-1">Notes</span>
-                  <p className="text-muted-foreground">{detailInvoice.notes}</p>
-                </div>
-              )}
-              {detailInvoice.status !== 'pending' && detailInvoice.reviewNotes && (
-                <div>
-                  <span className="text-muted-foreground block mb-1">Review notes</span>
-                  <p className="text-muted-foreground">{detailInvoice.reviewNotes}</p>
-                </div>
-              )}
-              {isFinanceOrAdmin && detailInvoice.status === 'pending' && (
-                <div className="space-y-3 pt-2 border-t">
-                  <label className="text-sm font-medium">Review notes (optional)</label>
-                  <Textarea
-                    placeholder="Add notes for the submitter..."
-                    value={reviewNotes}
-                    onChange={(e) => setReviewNotes(e.target.value)}
-                    className="min-h-20"
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      className="bg-green-500/10 text-green-600 border-green-500/30"
-                      onClick={() => setReviewStatus('approved')}
+              {myInvoices.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No submissions yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {myInvoices.map((inv) => (
+                    <div
+                      key={inv._id}
+                      className="flex items-center justify-between gap-4 glass rounded-lg border border-border/40 p-3"
                     >
-                      <CheckCircle2 className="size-4 mr-1" /> Approve
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="bg-red-500/10 text-red-600 border-red-500/30"
-                      onClick={() => setReviewStatus('rejected')}
-                    >
-                      <XCircle className="size-4 mr-1" /> Reject
-                    </Button>
-                  </div>
-                  {reviewStatus && (
-                    <DialogFooter>
-                      <Button variant="ghost" onClick={() => setReviewStatus(null)}>Cancel</Button>
-                      <Button onClick={handleApproveReject}>
-                        Confirm {reviewStatus === 'approved' ? 'approval' : 'rejection'}
-                      </Button>
-                    </DialogFooter>
-                  )}
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{inv.eventName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(inv.eventDate).toLocaleDateString('en-IN')} · ₹{inv.totalAmountClaimed}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <StatusBadge status={inv.status} />
+                        <Button size="sm" variant="ghost" onClick={() => openDetail(inv)}>
+                          View
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-          </DialogContent>
+          </>
         )}
-      </Dialog>
+
+        {(isAdmin || isAccounts) && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold">
+                {isAdmin ? `Pending admin review (${pendingAdmin.length})` : `Raised invoices (${pendingAccounts.length} pending)`}
+              </h3>
+              {isAccounts && paidInvoices.length > 0 && (
+                <span className="text-xs text-muted-foreground">Paid: {paidInvoices.length}</span>
+              )}
+            </div>
+
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <div className="space-y-3">
+                {(isAdmin ? pendingAdmin : pendingAccounts).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No invoices in this stage.</p>
+                ) : (
+                  (isAdmin ? pendingAdmin : pendingAccounts).map((inv) => (
+                    <div
+                      key={inv._id}
+                      className="glass rounded-xl border border-border/50 p-4 flex items-start justify-between gap-4"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{inv.eventName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {inv.fullName} · {inv.email} · ₹{inv.totalAmountClaimed}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <StatusBadge status={inv.status} />
+                        <Button size="sm" onClick={() => openDetail(inv)}>
+                          Review
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {isAccounts && paidInvoices.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-border/60">
+                    <div className="text-sm font-semibold text-muted-foreground">Paid invoices</div>
+                    {paidInvoices.map((inv) => (
+                      <div
+                        key={inv._id}
+                        className="glass rounded-lg border border-border/40 p-3 flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{inv.eventName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inv.fullName} · ₹{inv.totalAmountClaimed}
+                          </p>
+                        </div>
+                        <StatusBadge status={inv.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <Dialog open={!!detailInvoice} onOpenChange={(o) => !o && setDetailInvoice(null)}>
+          {detailInvoice && (
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 flex flex-col">
+              <div className="px-6 pt-6 pb-3 border-b border-border/50">
+                <DialogHeader>
+                  <DialogTitle className="text-base">{detailInvoice.eventName}</DialogTitle>
+                </DialogHeader>
+              </div>
+
+              <div className="px-6 py-4 border-b border-border/50">
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <span className="text-muted-foreground">Submitter</span>
+                  <span className="min-w-0 truncate">{detailInvoice.fullName}</span>
+                  <span className="text-muted-foreground">Email</span>
+                  <span className="min-w-0 truncate">{detailInvoice.email}</span>
+                  <span className="text-muted-foreground">Admin approved by</span>
+                  <span className="min-w-0 truncate">
+                    {detailInvoice.adminReviewedBy?.name || detailInvoice.adminReviewedBy?.email || '—'}
+                  </span>
+                  <span className="text-muted-foreground">Accounts approved by</span>
+                  <span className="min-w-0 truncate">
+                    {detailInvoice.accountsReviewedBy?.name || detailInvoice.accountsReviewedBy?.email || '—'}
+                  </span>
+                  <span className="text-muted-foreground">Event date</span>
+                  <span>{new Date(detailInvoice.eventDate).toLocaleDateString('en-IN')}</span>
+                  <span className="text-muted-foreground">Amount</span>
+                  <span className="font-semibold">₹{detailInvoice.totalAmountClaimed}</span>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+
+                <div>
+                  <div className="text-sm font-semibold mb-1">Bills link</div>
+                  <a
+                    href={detailInvoice.billsDriveLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline break-all flex items-center gap-1"
+                  >
+                    {detailInvoice.billsDriveLink.slice(0, 60)}… <ExternalLink className="size-3" />
+                  </a>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Budget breakdown</div>
+                  <div className="text-muted-foreground whitespace-pre-wrap">{detailInvoice.budgetBreakdown}</div>
+                </div>
+
+                {detailInvoice.notes && (
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">Notes</div>
+                    <div className="text-muted-foreground whitespace-pre-wrap">{detailInvoice.notes}</div>
+                  </div>
+                )}
+
+                {(detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes) && (
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">Review notes</div>
+                    <div className="text-muted-foreground whitespace-pre-wrap">
+                      {detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2 pt-2 border-t border-border/50">
+                  <div className="text-sm font-semibold">Review comments</div>
+                  {invoiceComments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No comments yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {invoiceComments.map((c, idx) => {
+                        const name = c.author?.name || c.author?.email || 'Reviewer'
+                        const time = c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN') : ''
+                        return (
+                          <div key={c._id || `${detailInvoice._id}-${idx}`} className="glass rounded-lg border border-border/40 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs text-muted-foreground font-medium truncate">{name}</div>
+                              <div className="text-[10px] text-muted-foreground shrink-0">{time}</div>
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap mt-2">{c.body}</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {canPostComment() && (
+                    <div className="space-y-2 pt-2">
+                      <Textarea
+                        placeholder="Add a comment (visible to the other reviewer)"
+                        value={newCommentBody}
+                        onChange={(e) => setNewCommentBody(e.target.value)}
+                        className="min-h-20"
+                      />
+                      <div className="flex items-center justify-end">
+                        <Button onClick={handleAddComment} disabled={savingComment} className="gap-2">
+                          {savingComment ? 'Adding…' : 'Add comment'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {isAdmin && detailInvoice.status === 'pending_admin' && (
+                  <div className="pt-3 border-t border-border/50 space-y-3">
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">Admin decision (required)</div>
+                      <Textarea
+                        placeholder="Optional admin notes"
+                        value={reviewNotes}
+                        onChange={(e) => setReviewNotes(e.target.value)}
+                        className="min-h-20"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="bg-green-500/10 text-green-600 border-green-500/30"
+                        onClick={() => setDecision('approved')}
+                      >
+                        <CheckCircle2 className="size-4 mr-1" /> Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="bg-red-500/10 text-red-600 border-red-500/30"
+                        onClick={() => setDecision('rejected')}
+                      >
+                        <XCircle className="size-4 mr-1" /> Reject
+                      </Button>
+                    </div>
+                    {decision && (
+                      <DialogFooter>
+                        <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
+                          Cancel
+                        </Button>
+                        <Button disabled={savingDecision} onClick={confirmDecision}>
+                          Confirm
+                        </Button>
+                      </DialogFooter>
+                    )}
+                  </div>
+                )}
+
+                {isAccounts && detailInvoice.status === 'pending_accounts' && (
+                  <div className="pt-3 border-t border-border/50 space-y-3">
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">Accounts decision</div>
+                      <Textarea
+                        placeholder="Optional accounts notes"
+                        value={reviewNotes}
+                        onChange={(e) => setReviewNotes(e.target.value)}
+                        className="min-h-20"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="bg-green-500/10 text-green-600 border-green-500/30"
+                        onClick={() => setDecision('paid')}
+                      >
+                        <CheckCircle2 className="size-4 mr-1" /> Approve & Pay
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="bg-red-500/10 text-red-600 border-red-500/30"
+                        onClick={() => setDecision('rejected')}
+                      >
+                        <XCircle className="size-4 mr-1" /> Reject
+                      </Button>
+                    </div>
+                    {decision && (
+                      <DialogFooter>
+                        <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
+                          Cancel
+                        </Button>
+                        <Button disabled={savingDecision} onClick={confirmDecision}>
+                          Confirm
+                        </Button>
+                      </DialogFooter>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-border/50 bg-muted/20 px-6 py-4">
+                <DialogFooter className="gap-2">
+                  <Button variant="ghost" onClick={() => setDetailInvoice(null)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </div>
+            </DialogContent>
+          )}
+        </Dialog>
+      </div>
     </div>
   )
 }
 
-function StatusBadge({ status }: { status: InvoiceStatus }) {
-  if (status === 'approved')
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 text-green-600 text-xs px-2 py-0.5">
-        <CheckCircle2 className="size-3" /> Approved
-      </span>
-    )
-  if (status === 'rejected')
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 text-red-600 text-xs px-2 py-0.5">
-        <XCircle className="size-3" /> Rejected
-      </span>
-    )
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 text-amber-600 text-xs px-2 py-0.5">
-      <Clock className="size-3" /> Pending
-    </span>
-  )
-}

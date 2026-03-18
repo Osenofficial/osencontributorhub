@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
-export type InvoiceStatus = "pending" | "approved" | "rejected";
+export type InvoiceStatus = "pending_admin" | "pending_accounts" | "paid" | "rejected";
 export type OSENRoleOption =
   | "community_manager"
   | "design_team"
@@ -30,9 +30,19 @@ export interface IInvoice extends Document {
   notes?: string;
   confirmationChecked: boolean;
   status: InvoiceStatus;
-  reviewedBy?: Types.ObjectId;
-  reviewedAt?: Date;
-  reviewNotes?: string;
+  adminReviewedBy?: Types.ObjectId;
+  adminReviewedAt?: Date;
+  adminReviewNotes?: string;
+  accountsReviewedBy?: Types.ObjectId;
+  accountsReviewedAt?: Date;
+  accountsReviewNotes?: string;
+  paidAt?: Date;
+  comments?: Array<{
+    author: Types.ObjectId;
+    role: string;
+    body: string;
+    createdAt?: Date;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,13 +74,25 @@ const InvoiceSchema = new Schema<IInvoice>(
     confirmationChecked: { type: Boolean, required: true },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
-      default: "pending",
+      enum: ["pending_admin", "pending_accounts", "paid", "rejected"],
+      default: "pending_admin",
       index: true,
     },
-    reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
-    reviewedAt: { type: Date },
-    reviewNotes: { type: String, trim: true },
+    adminReviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    adminReviewedAt: { type: Date },
+    adminReviewNotes: { type: String, trim: true },
+    accountsReviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    accountsReviewedAt: { type: Date },
+    accountsReviewNotes: { type: String, trim: true },
+    paidAt: { type: Date },
+    comments: [
+      {
+        author: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+        role: { type: String, required: true, trim: true },
+        body: { type: String, required: true, trim: true, maxlength: 2000 },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

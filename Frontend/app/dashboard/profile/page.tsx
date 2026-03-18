@@ -11,11 +11,25 @@ import { useApp } from '@/lib/app-context'
 import { MONTHLY_POINT_CAP, getPayoutForPoints, BADGES } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 export default function ProfilePage() {
-  const { currentUser } = useApp()
+  const { currentUser, refreshUser } = useApp()
   const [tasks, setTasks] = useState<any[]>([])
   const [leaderboard, setLeaderboard] = useState<any[]>([])
+  const [editOpen, setEditOpen] = useState(false)
+  const [position, setPosition] = useState('')
+  const [selectedInterests, setSelectedInterests] = useState<string[]>([])
+  const [customInterest, setCustomInterest] = useState('')
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!currentUser?.id) return
@@ -26,6 +40,18 @@ export default function ProfilePage() {
       .then(setLeaderboard)
       .catch(() => setLeaderboard([]))
   }, [currentUser?.id])
+
+  const INTEREST_OPTIONS = [
+    'Designing',
+    'Video editor',
+    'Non technical work',
+    'Docs improvement',
+    'Frontend design',
+    'Backend',
+    'MERN',
+    'Community',
+    'Research',
+  ]
 
   const myTasks = tasks
   const completed = myTasks.filter((t) => t.status === 'completed')
@@ -44,6 +70,47 @@ export default function ProfilePage() {
     (id) => BADGES.find((b) => b.id === id)
   ).filter(Boolean) ?? []
 
+  useEffect(() => {
+    if (!editOpen || !currentUser?.id) return
+    setPosition(currentUser.position || '')
+    setSelectedInterests(currentUser.interests || [])
+    setCustomInterest('')
+  }, [editOpen, currentUser?.id])
+
+  function toggleInterest(interest: string) {
+    setSelectedInterests((prev) => {
+      if (prev.includes(interest)) return prev.filter((x) => x !== interest)
+      return [...prev, interest]
+    })
+  }
+
+  function addCustomInterest() {
+    const trimmed = customInterest.trim()
+    if (!trimmed) return
+    toggleInterest(trimmed)
+    setCustomInterest('')
+  }
+
+  async function handleSaveProfile() {
+    if (!currentUser?.id) return
+    setSaving(true)
+    try {
+      await apiFetch('/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          position: position.trim(),
+          interests: selectedInterests,
+        }),
+      })
+      setEditOpen(false)
+      await refreshUser()
+    } catch {
+      // ignore - backend will respond with message, but we keep UI simple
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="flex flex-col min-h-full">
       <DashboardTopbar title="My Profile" />
@@ -61,6 +128,36 @@ export default function ProfilePage() {
               <h2 className="text-2xl font-bold">{currentUser?.name}</h2>
               <p className="text-muted-foreground text-sm mt-0.5 capitalize">{currentUser?.role} &middot; {currentUser?.email}</p>
               <p className="text-sm mt-2 leading-relaxed text-foreground/80">{currentUser?.bio || 'No bio yet.'}</p>
+
+              <div className="mt-3 flex items-start justify-between gap-4 flex-wrap">
+                <div className="text-sm">
+                  <div className="text-xs text-muted-foreground">Position</div>
+                  <div className="font-medium text-foreground/90">{currentUser?.position || '—'}</div>
+                </div>
+                <div className="text-sm">
+                  <div className="text-xs text-muted-foreground">Interests</div>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {(currentUser?.interests || []).length === 0 ? (
+                      <span className="text-xs text-muted-foreground">No interests yet.</span>
+                    ) : (
+                      currentUser?.interests.map((i) => (
+                        <span
+                          key={i}
+                          className="text-xs rounded-full border border-border/60 bg-background/40 px-2 py-0.5"
+                        >
+                          {i}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <Button size="sm" onClick={() => setEditOpen(true)} className="gap-1.5">
+                  Edit Profile
+                </Button>
+              </div>
               <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                 <Calendar className="size-3.5" />
                 <span>Joined {currentUser?.joinedAt ? new Date(currentUser.joinedAt).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : '—'}</span>
@@ -78,6 +175,69 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
+
+        {/* Edit Profile Dialog */}
+        <Dialog open={editOpen} onOpenChange={(o) => !o && setEditOpen(false)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit Profile</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Position</label>
+                <Input
+                  value={position}
+                  onChange={(e) => setPosition(e.target.value)}
+                  placeholder="e.g. Community Manager, Video Editor, Frontend Developer..."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Interests</label>
+                <div className="flex flex-wrap gap-2">
+                  {INTEREST_OPTIONS.map((opt) => {
+                    const active = selectedInterests.includes(opt)
+                    return (
+                      <Button
+                        key={opt}
+                        type="button"
+                        size="sm"
+                        variant={active ? 'default' : 'outline'}
+                        onClick={() => toggleInterest(opt)}
+                      >
+                        {opt}
+                      </Button>
+                    )
+                  })}
+                </div>
+
+                <div className="pt-2 space-y-2">
+                  <label className="text-xs text-muted-foreground">Other (optional)</label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={customInterest}
+                      onChange={(e) => setCustomInterest(e.target.value)}
+                      placeholder="Type custom interest and click Add"
+                    />
+                    <Button type="button" variant="outline" onClick={addCustomInterest} disabled={!customInterest.trim()}>
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4 gap-2">
+              <Button variant="ghost" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveProfile} disabled={saving} className="gap-1.5">
+                {saving ? 'Saving...' : 'Save'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
           {[

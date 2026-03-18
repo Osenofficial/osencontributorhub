@@ -1,7 +1,14 @@
 // Types and constants for OSEN Contributor Hub
 // All dynamic data comes from the API
 
-export type Role = 'admin' | 'lead' | 'associate' | 'intern' | 'finance'
+export type Role =
+  | 'admin'
+  | 'lead'
+  | 'associate'
+  | 'intern'
+  | 'finance'
+  | 'accounts'
+  | 'evangelist'
 export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'completed'
 export type TaskCategory = 'content' | 'development' | 'design' | 'community' | 'research'
 export type Priority = 'low' | 'medium' | 'high' | 'urgent'
@@ -19,6 +26,8 @@ export interface User {
   joinedAt: string
   badges: Badge[]
   bio: string
+  position: string
+  interests: string[]
 }
 
 export interface Badge {

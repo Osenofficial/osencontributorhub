@@ -3,11 +3,12 @@ import { cn } from '@/lib/utils'
 interface AvatarCircleProps {
   initials: string
   src?: string | null
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
   className?: string
 }
 
 const SIZE_MAP = {
+  xs: 'size-6 text-[10px]',
   sm: 'size-7 text-xs',
   md: 'size-9 text-sm',
   lg: 'size-12 text-base',

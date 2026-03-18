@@ -36,6 +36,8 @@ function mapAuthUserToUser(auth: AuthUser): User {
     rank: auth.rank ?? 0,
     joinedAt: auth.joinedAt ? new Date(auth.joinedAt).toISOString() : new Date().toISOString(),
     bio: auth.bio ?? '',
+    position: (auth as any).position ?? '',
+    interests: (auth as any).interests ?? [],
     badges: (auth.badges as any) ?? [],
   }
 }

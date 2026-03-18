@@ -423,12 +423,34 @@ dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
 // ----- Invoices (Travel Reimbursement) -----
 const INVOICE_MAX_AMOUNT = 1000;
 
-function canManageInvoices(role: string): boolean {
-  return role === "admin" || role === "finance";
+function canViewInvoiceStage(role: string, invoice: any): boolean {
+  if (role === "admin") return true;
+  if (role === "accounts") return ["pending_accounts", "paid"].includes(invoice.status);
+  // Evangelist sees only own invoices
+  return false;
+}
+
+function canViewInvoiceComments(userRole: string, invoice: any, userId: string | null): boolean {
+  if (userRole === "admin") return true;
+  if (userRole === "accounts") return ["pending_accounts", "paid", "rejected"].includes(invoice.status);
+  if (userRole === "evangelist") {
+    const ownerId = invoice.submittedBy?._id?.toString?.() ?? invoice.submittedBy?.toString?.();
+    return !!userId && ownerId === userId;
+  }
+  return false;
+}
+
+function canPostInvoiceComment(userRole: string, invoice: any): boolean {
+  if (userRole === "admin") return invoice.status === "pending_admin";
+  if (userRole === "accounts") return invoice.status === "pending_accounts";
+  return false;
 }
 
 dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
   try {
+    if (req.user!.role !== "evangelist") {
+      return res.status(403).json({ message: "Only Evangelist accounts can raise invoices" });
+    }
     const userId = req.user!._id;
     const body = req.body;
 
@@ -465,9 +487,8 @@ dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
       confirmationChecked: !!body.confirmationChecked,
     });
 
-    const financeUsers = await User.find({ role: "finance" }).select("_id");
     const adminUsers = await User.find({ role: "admin" }).select("_id");
-    const notifyIds = [...new Set([...financeUsers.map((u) => u._id), ...adminUsers.map((u) => u._id)])];
+    const notifyIds = adminUsers.map((u) => u._id);
     for (const id of notifyIds) {
       await Notification.create({
         user: id,
@@ -487,16 +508,30 @@ dashboardRouter.get("/invoices", async (req: AuthRequest, res, next) => {
     const userId = req.user!._id;
     const role = req.user!.role;
 
-    if (canManageInvoices(role)) {
-      const status = (req.query.status as string) || undefined;
-      const filter = status ? { status } : {};
-      const invoices = await Invoice.find(filter)
-        .populate("submittedBy", "name email")
+    if (role === "admin") {
+      const invoices = await Invoice.find({ status: "pending_admin" })
+        .populate("submittedBy", "name email role")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role")
         .sort({ createdAt: -1 });
       return res.json(invoices);
     }
 
-    const invoices = await Invoice.find({ submittedBy: userId }).sort({ createdAt: -1 });
+    if (role === "accounts") {
+      const invoices = await Invoice.find({ status: { $in: ["pending_accounts", "paid"] } })
+        .populate("submittedBy", "name email role")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role")
+        .sort({ createdAt: -1 });
+      return res.json(invoices);
+    }
+
+    // evangelist
+    const invoices = await Invoice.find({ submittedBy: userId })
+      .populate("submittedBy", "name email role")
+      .populate("adminReviewedBy", "name email role")
+      .populate("accountsReviewedBy", "name email role")
+      .sort({ createdAt: -1 });
     res.json(invoices);
   } catch (err) {
     next(err);
@@ -505,14 +540,22 @@ dashboardRouter.get("/invoices", async (req: AuthRequest, res, next) => {
 
 dashboardRouter.get("/invoices/:id", async (req: AuthRequest, res, next) => {
   try {
-    const invoice = await Invoice.findById(req.params.id).populate("submittedBy", "name email");
+    const invoice = await Invoice.findById(req.params.id)
+      .populate("submittedBy", "name email role")
+      .populate("adminReviewedBy", "name email role")
+      .populate("accountsReviewedBy", "name email role");
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
     }
     const userId = req.user!._id.toString();
     const isOwner = invoice.submittedBy._id.toString() === userId;
-    const canManage = canManageInvoices(req.user!.role);
-    if (!isOwner && !canManage) {
+    if (req.user!.role === "evangelist" && !isOwner) {
+      return res.status(403).json({ message: "You do not have access to this invoice" });
+    }
+    if (req.user!.role === "accounts" && !canViewInvoiceStage(req.user!.role, invoice)) {
+      return res.status(403).json({ message: "You do not have access to this invoice" });
+    }
+    if (req.user!.role !== "admin" && req.user!.role !== "accounts" && req.user!.role !== "evangelist") {
       return res.status(403).json({ message: "You do not have access to this invoice" });
     }
     res.json(invoice);
@@ -523,37 +566,162 @@ dashboardRouter.get("/invoices/:id", async (req: AuthRequest, res, next) => {
 
 dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
   try {
-    if (!canManageInvoices(req.user!.role)) {
-      return res.status(403).json({ message: "Only admin or finance can approve or reject invoices" });
-    }
-    const invoice = await Invoice.findById(req.params.id).populate("submittedBy", "name email");
+    const role = req.user!.role;
+    const invoice = await Invoice.findById(req.params.id);
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
     }
-    const { status, reviewNotes } = req.body;
-    if (!status || !["approved", "rejected"].includes(status)) {
-      return res.status(400).json({ message: "status must be approved or rejected" });
+
+    const { action, reviewNotes } = req.body as {
+      action?: string;
+      reviewNotes?: unknown;
+    };
+    const notes = reviewNotes != null ? String(reviewNotes).trim() : undefined;
+
+    if (role === "admin") {
+      if (invoice.status !== "pending_admin") {
+        return res.status(400).json({ message: "Invoice is not pending admin review" });
+      }
+      if (!action || !["approved", "rejected"].includes(action)) {
+        return res.status(400).json({ message: "action must be approved or rejected" });
+      }
+
+      invoice.adminReviewedBy = req.user!._id;
+      invoice.adminReviewedAt = new Date();
+      if (notes) invoice.adminReviewNotes = notes;
+
+      if (action === "approved") {
+        invoice.status = "pending_accounts";
+      } else {
+        invoice.status = "rejected";
+      }
+
+      await invoice.save();
+
+      // Notify the submitter
+      await Notification.create({
+        user: invoice.submittedBy,
+        title:
+          action === "approved"
+            ? "Admin approved travel reimbursement"
+            : "Admin rejected travel reimbursement",
+        message:
+          action === "approved"
+            ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) is approved. Accounts will review next.`
+            : `Your reimbursement for "${invoice.eventName}" was rejected by admin.${notes ? ` Notes: ${notes}` : ""}`,
+      });
+
+      // Notify all accounts users when admin approves
+      if (action === "approved") {
+        const accountsUsers = await User.find({ role: "accounts" }).select("_id");
+        for (const u of accountsUsers) {
+          await Notification.create({
+            user: u._id,
+            title: "Invoice approved by admin",
+            message: `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`,
+          });
+        }
+      }
+
+      const updated = await Invoice.findById(invoice._id)
+        .populate("submittedBy", "name email role")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role");
+      return res.json(updated);
     }
-    invoice.status = status;
-    invoice.reviewedBy = req.user!._id;
-    invoice.reviewedAt = new Date();
-    if (reviewNotes != null) invoice.reviewNotes = String(reviewNotes).trim();
+
+    if (role === "accounts") {
+      if (invoice.status !== "pending_accounts") {
+        return res.status(400).json({ message: "Invoice is not pending accounts approval" });
+      }
+      if (!action || !["paid", "rejected"].includes(action)) {
+        return res.status(400).json({ message: "action must be paid or rejected" });
+      }
+
+      invoice.accountsReviewedBy = req.user!._id;
+      invoice.accountsReviewedAt = new Date();
+      if (notes) invoice.accountsReviewNotes = notes;
+      if (action === "paid") {
+        invoice.status = "paid";
+        invoice.paidAt = new Date();
+      } else {
+        invoice.status = "rejected";
+      }
+
+      await invoice.save();
+
+      await Notification.create({
+        user: invoice.submittedBy,
+        title: action === "paid" ? "Reimbursement paid" : "Reimbursement rejected by accounts",
+        message:
+          action === "paid"
+            ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) has been marked as paid.`
+            : `Your reimbursement for "${invoice.eventName}" was rejected by accounts.${notes ? ` Notes: ${notes}` : ""}`,
+      });
+
+      const updated = await Invoice.findById(invoice._id)
+        .populate("submittedBy", "name email role")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role");
+      return res.json(updated);
+    }
+
+    return res.status(403).json({ message: "Forbidden" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----- Invoice review comments -----
+dashboardRouter.get("/invoices/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id).populate("comments.author", "name email avatar role");
+    if (!invoice) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    const userId = req.user?._id?.toString?.() ?? null;
+    const allowed = canViewInvoiceComments(req.user!.role, invoice, userId);
+    if (!allowed) {
+      return res.status(403).json({ message: "You do not have access to this invoice comments" });
+    }
+
+    res.json((invoice as any).comments || []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.post("/invoices/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id);
+    if (!invoice) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    const canPost = canPostInvoiceComment(req.user!.role, invoice);
+    if (!canPost) {
+      return res.status(403).json({ message: "You do not have permission to comment at this stage" });
+    }
+
+    const { body } = req.body as { body?: unknown };
+    if (!body || typeof body !== "string" || !body.trim()) {
+      return res.status(400).json({ message: "Comment body is required" });
+    }
+
+    const comment = {
+      author: req.user!._id,
+      role: req.user!.role,
+      body: body.trim().slice(0, 2000),
+      createdAt: new Date(),
+    };
+
+    (invoice as any).comments = Array.isArray((invoice as any).comments) ? (invoice as any).comments : [];
+    (invoice as any).comments.push(comment);
     await invoice.save();
 
-    await Notification.create({
-      user: invoice.submittedBy._id,
-      title:
-        status === "approved"
-          ? "Travel reimbursement approved"
-          : "Travel reimbursement not approved",
-      message:
-        status === "approved"
-          ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) has been approved.`
-          : `Your reimbursement for "${invoice.eventName}" was not approved.${invoice.reviewNotes ? ` Notes: ${invoice.reviewNotes}` : ""}`,
-    });
-
-    const updated = await Invoice.findById(invoice._id).populate("submittedBy", "name email");
-    res.json(updated);
+    const updated = await Invoice.findById(invoice._id).populate("comments.author", "name email avatar role");
+    res.status(201).json((updated as any).comments?.slice(-1)?.[0] ?? null);
   } catch (err) {
     next(err);
   }

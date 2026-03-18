@@ -319,33 +319,51 @@ export default function TasksPage() {
 
       {/* View Task & Comments Dialog */}
       <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
-        <DialogContent className="max-w-lg border-border bg-card shadow-xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{viewTask?.title}</DialogTitle>
-            <p className="text-sm text-muted-foreground leading-relaxed">{viewTask?.description}</p>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
+        <DialogContent className="max-w-lg border-border bg-card shadow-xl max-h-[90vh] overflow-hidden p-0 flex flex-col">
+          {/* Keep header visible so the close button never scrolls out of view */}
+          <div className="px-6 pt-6 pb-3 border-b border-border/50">
+            <DialogHeader>
+              <DialogTitle>{viewTask?.title}</DialogTitle>
+              <p className="text-sm text-muted-foreground leading-relaxed">{viewTask?.description}</p>
+            </DialogHeader>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             <div className="flex flex-wrap gap-2">
               <StatusBadge value={viewTask?.category} type="category" />
               <StatusBadge value={viewTask?.status} type="status" />
               <span className="text-sm font-mono text-primary font-semibold">{viewTask?.points} pts</span>
             </div>
+
             {viewTask?.submission && (
               <div className="rounded-lg border border-border/50 p-3 text-xs space-y-1">
                 <div className="font-semibold">Submission</div>
                 {viewTask.submission.githubLink && (
-                  <a href={viewTask.submission.githubLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
+                  <a
+                    href={viewTask.submission.githubLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline block truncate"
+                  >
                     {viewTask.submission.githubLink}
                   </a>
                 )}
                 {viewTask.submission.notionLink && (
-                  <a href={viewTask.submission.notionLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
+                  <a
+                    href={viewTask.submission.notionLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline block truncate"
+                  >
                     {viewTask.submission.notionLink}
                   </a>
                 )}
-                {viewTask.submission.comments && <p className="text-muted-foreground whitespace-pre-wrap">{viewTask.submission.comments}</p>}
+                {viewTask.submission.comments && (
+                  <p className="text-muted-foreground whitespace-pre-wrap">{viewTask.submission.comments}</p>
+                )}
               </div>
             )}
+
             <div className="border-t border-border/50 pt-4">
               <TaskComments taskId={viewTask?._id} />
             </div>

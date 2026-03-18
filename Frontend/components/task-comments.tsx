@@ -64,34 +64,39 @@ export function TaskComments({
         <p className="text-xs text-muted-foreground">Loading comments…</p>
       ) : (
         <>
-          <div className="space-y-2 max-h-40 overflow-y-auto">
+          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {comments.length === 0 ? (
               <p className="text-xs text-muted-foreground">No comments yet.</p>
             ) : (
               comments.map((c) => (
                 <div
                   key={c._id}
-                  className="rounded-lg border border-border/50 bg-muted/20 p-2.5 text-xs"
+                  className="rounded-xl border border-border/50 bg-muted/20 p-3 text-xs"
                 >
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-start gap-3">
                     <AvatarCircle
                       size="xs"
                       initials={c.author?.name?.slice(0, 2) ?? '?'}
                       src={c.author?.avatar?.startsWith?.('http') ? c.author.avatar : undefined}
+                      className="mt-0.5"
                     />
-                    <span className="font-medium">{c.author?.name ?? 'Unknown'}</span>
-                    <span className="text-muted-foreground">
-                      {c.createdAt
-                        ? new Date(c.createdAt).toLocaleString('en-IN', {
-                            day: 'numeric',
-                            month: 'short',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
-                        : ''}
-                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-medium truncate">{c.author?.name ?? 'Unknown'}</span>
+                        <span className="text-muted-foreground whitespace-nowrap">
+                          {c.createdAt
+                            ? new Date(c.createdAt).toLocaleString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : ''}
+                        </span>
+                      </div>
+                      <p className="text-muted-foreground whitespace-pre-wrap">{c.body}</p>
+                    </div>
                   </div>
-                  <p className="text-muted-foreground whitespace-pre-wrap pl-7">{c.body}</p>
                 </div>
               ))
             )}

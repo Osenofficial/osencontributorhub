@@ -32,7 +32,7 @@ export type AuthUser = {
   id: string
   name: string
   email: string
-  role: 'admin' | 'lead' | 'associate' | 'intern' | 'finance'
+  role: 'admin' | 'lead' | 'associate' | 'intern' | 'finance' | 'accounts' | 'evangelist'
   status?: 'pending' | 'active' | 'rejected' | 'suspended'
   avatar?: string
   points?: number
@@ -40,6 +40,8 @@ export type AuthUser = {
   rank?: number
   joinedAt?: string
   bio?: string
+  position?: string
+  interests?: string[]
   badges?: string[]
 }
 

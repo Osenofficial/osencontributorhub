@@ -1,6 +1,13 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-export type UserRole = "admin" | "lead" | "associate" | "intern" | "finance";
+export type UserRole =
+  | "admin"
+  | "lead"
+  | "associate"
+  | "intern"
+  | "finance"
+  | "accounts"
+  | "evangelist";
 
 export interface IUser extends Document {
   name: string;
@@ -13,6 +20,8 @@ export interface IUser extends Document {
   rank: number;
   joinedAt: Date;
   bio: string;
+  position: string;
+  interests: string[];
   badges: string[];
   isActive: boolean;
   status: "pending" | "active" | "rejected" | "suspended";
@@ -33,13 +42,20 @@ const UserSchema = new Schema<IUser>(
       index: true,
     },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ["admin", "lead", "associate", "intern", "finance"], default: "intern", index: true },
+    role: {
+      type: String,
+      enum: ["admin", "lead", "associate", "intern", "finance", "accounts", "evangelist"],
+      default: "intern",
+      index: true,
+    },
     avatar: { type: String, default: "" },
     points: { type: Number, default: 0, min: 0 },
     tasksCompleted: { type: Number, default: 0, min: 0 },
     rank: { type: Number, default: 0 },
     joinedAt: { type: Date, default: Date.now },
     bio: { type: String, default: "" },
+    position: { type: String, default: "" },
+    interests: { type: [String], default: [] },
     badges: { type: [String], default: [] },
     isActive: { type: Boolean, default: true, index: true },
     status: { type: String, enum: ["pending", "active", "rejected", "suspended"], default: "pending", index: true },

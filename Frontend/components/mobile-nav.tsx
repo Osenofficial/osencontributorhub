@@ -17,6 +17,12 @@ const NAV = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
 ]
 
+const NAV_INVOICES = [
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/profile', label: 'Profile', icon: User },
+  { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
+]
+
 const SUBMIT_TASK_NAV = { href: '/dashboard/submit-task', label: 'Submit', icon: Send }
 
 export function MobileNav() {
@@ -33,7 +39,11 @@ export function MobileNav() {
   return (
     <nav className="fixed bottom-0 inset-x-0 z-50 border-t border-border/50 bg-sidebar/95 backdrop-blur-sm md:hidden">
       <div className="flex items-center justify-around px-2 py-2">
-        {NAV.map((item) => {
+        {(() => {
+          const role = currentUser?.role
+          if (role === 'accounts' || role === 'evangelist') return NAV_INVOICES
+          return NAV
+        })().map((item) => {
           const active = pathname === item.href
           return (
             <Link
@@ -52,7 +62,11 @@ export function MobileNav() {
             </Link>
           )
         })}
-        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && currentUser?.role !== 'finance' && (
+        {currentUser?.role !== 'admin' &&
+          currentUser?.role !== 'lead' &&
+          currentUser?.role !== 'finance' &&
+          currentUser?.role !== 'accounts' &&
+          currentUser?.role !== 'evangelist' && (
           <Link
             href={SUBMIT_TASK_NAV.href}
             className={cn(
@@ -64,7 +78,10 @@ export function MobileNav() {
             <span className="text-[10px] font-medium">{SUBMIT_TASK_NAV.label}</span>
           </Link>
         )}
-        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && currentUser?.role !== 'finance' && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') &&
+          currentUser?.role !== 'finance' &&
+          currentUser?.role !== 'accounts' &&
+          currentUser?.role !== 'evangelist' && (
           <Link
             href="/dashboard/admin"
             className={cn(

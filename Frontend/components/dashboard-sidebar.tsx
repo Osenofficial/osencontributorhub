@@ -38,6 +38,12 @@ const NAV_ITEMS_FINANCE = [
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
 ]
 
+const NAV_ITEMS_INVOICES = [
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/profile', label: 'Profile', icon: User },
+  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+]
+
 const ADMIN_NAV_ITEMS = [
   { href: '/dashboard/admin', label: 'Admin Panel', icon: Shield },
 ]
@@ -68,7 +74,12 @@ export function DashboardSidebar() {
 
       {/* Nav */}
       <nav className="flex-1 space-y-1">
-        {(currentUser?.role === 'finance' ? NAV_ITEMS_FINANCE : NAV_ITEMS).map((item) => {
+        {(() => {
+          const role = currentUser?.role
+          if (role === 'accounts' || role === 'evangelist') return NAV_ITEMS_INVOICES
+          if (role === 'finance') return NAV_ITEMS_FINANCE
+          return NAV_ITEMS
+        })().map((item) => {
           const active = pathname === item.href
           return (
             <Link
@@ -92,7 +103,11 @@ export function DashboardSidebar() {
           )
         })}
 
-        {currentUser?.role !== 'admin' && currentUser?.role !== 'lead' && currentUser?.role !== 'finance' && (
+        {currentUser?.role !== 'admin' &&
+          currentUser?.role !== 'lead' &&
+          currentUser?.role !== 'finance' &&
+          currentUser?.role !== 'accounts' &&
+          currentUser?.role !== 'evangelist' && (
           <Link
             href="/dashboard/submit-task"
             className={cn(
@@ -145,6 +160,10 @@ export function DashboardSidebar() {
                 <><Shield className="size-3 text-primary" /> Admin</>
               ) : currentUser.role === 'finance' ? (
                 <><Receipt className="size-3 text-primary" /> Finance</>
+              ) : currentUser.role === 'accounts' ? (
+                <><Receipt className="size-3 text-primary" /> Accounts</>
+              ) : currentUser.role === 'evangelist' ? (
+                <><Star className="size-3 text-yellow-400" /> Evangelist</>
               ) : (
                 <><Star className="size-3 text-yellow-400" /> {currentUser.points} pts</>
               )}

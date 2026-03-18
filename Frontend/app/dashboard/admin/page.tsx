@@ -112,6 +112,7 @@ const DEFAULT_FORM: FormState = {
 
 export default function AdminPage() {
   const { currentUser } = useApp()
+  if (!currentUser) return null
   const [tasks, setTasks] = useState<Task[]>([])
   const [view, setView] = useState<'tasks' | 'users'>('tasks')
   const [showCreate, setShowCreate] = useState(false)
@@ -358,7 +359,11 @@ export default function AdminPage() {
               {members.map((user) => (
                 <div key={user._id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/20 transition-colors">
                   <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <AvatarCircle initials={user.avatar || user.name?.slice(0, 2) || '?'} size="sm" />
+                    <AvatarCircle
+                      initials={user.name?.slice(0, 2) || '?'}
+                      src={typeof user.avatar === 'string' && user.avatar.startsWith('http') ? user.avatar : undefined}
+                      size="sm"
+                    />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{user.name}</p>
                       <p className="text-xs text-muted-foreground truncate">{user.email}</p>
@@ -392,6 +397,8 @@ export default function AdminPage() {
                         <SelectItem value="associate">Associate</SelectItem>
                         <SelectItem value="lead">Lead</SelectItem>
                         <SelectItem value="finance">Finance</SelectItem>
+                          <SelectItem value="accounts">Accounts</SelectItem>
+                          <SelectItem value="evangelist">Evangelist</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
                       </SelectContent>
                     </Select>
@@ -661,7 +668,11 @@ export default function AdminPage() {
                     {members.map((m) => (
                       <SelectItem key={m._id} value={m._id} className="py-2">
                         <div className="flex items-center gap-2">
-                          <AvatarCircle initials={m.avatar || m.name?.slice(0, 2) || '?'} size="sm" />
+                          <AvatarCircle
+                            initials={m.name?.slice(0, 2) || '?'}
+                            src={typeof m.avatar === 'string' && m.avatar.startsWith('http') ? m.avatar : undefined}
+                            size="sm"
+                          />
                           <span>{m.name}</span>
                         </div>
                       </SelectItem>
@@ -698,11 +709,16 @@ export default function AdminPage() {
       {/* View Task Dialog */}
       <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
         {viewTask && (
-          <DialogContent className="glass border-border/60 max-w-lg">
-            <DialogHeader>
-              <DialogTitle className="text-base">{viewTask.title}</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
+          <DialogContent className="glass border-border/60 max-w-lg max-h-[90vh] overflow-hidden p-0 flex flex-col">
+            {/* Fixed header so the close X never scrolls out of view */}
+            <div className="px-6 pt-6 pb-3 border-b border-border/50">
+              <DialogHeader>
+                <DialogTitle className="text-base">{viewTask.title}</DialogTitle>
+              </DialogHeader>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
               <p className="text-sm text-muted-foreground leading-relaxed">{viewTask.description}</p>
               <div className="flex flex-wrap gap-2">
                 <StatusBadge value={viewTask.category} type="category" />
@@ -718,7 +734,7 @@ export default function AdminPage() {
                   <span className="text-muted-foreground">Deadline: </span>
                   <span>{formatDate((viewTask as any).deadline)}</span>
                 </div>
-                <div>
+                <div className="col-span-1">
                   <span className="text-muted-foreground">Assigned to: </span>
                   <span>{(viewTask as any).assignedTo?.name ?? '—'}</span>
                 </div>
@@ -806,11 +822,8 @@ export default function AdminPage() {
                       )
                       .map((entry: any, idx: number) => (
                         <div key={idx} className="text-[11px] text-muted-foreground">
-                          <span className="font-mono text-xs">
-                            {formatDate(entry.createdAt as string)}
-                          </span>{' '}
-                          ·{' '}
-                          <span className="font-semibold">{entry.action}</span>{' '}
+                          <span className="font-mono text-xs">{formatDate(entry.createdAt as string)}</span>{' '}
+                          · <span className="font-semibold">{entry.action}</span>{' '}
                           {entry.fromStatus && entry.toStatus && (
                             <span>
                               ({entry.fromStatus} → {entry.toStatus})
@@ -825,14 +838,21 @@ export default function AdminPage() {
                 <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} />
               </div>
             </div>
-            <DialogFooter className="gap-2">
-              {viewTask.status === 'submitted' && (
-                <Button onClick={() => handleApprove((viewTask as any)._id ?? viewTask.id)} className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5">
-                  <CheckCircle2 className="size-3.5" /> Approve
-                </Button>
-              )}
-              <Button variant="ghost" onClick={() => setViewTask(null)}>Close</Button>
-            </DialogFooter>
+
+            {/* Fixed footer so Close/Approve never get hidden */}
+            <div className="border-t border-border/50 bg-muted/20 px-6 py-4">
+              <DialogFooter className="gap-2">
+                {viewTask.status === 'submitted' && (
+                  <Button
+                    onClick={() => handleApprove((viewTask as any)._id ?? viewTask.id)}
+                    className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5"
+                  >
+                    <CheckCircle2 className="size-3.5" /> Approve
+                  </Button>
+                )}
+                <Button variant="ghost" onClick={() => setViewTask(null)}>Close</Button>
+              </DialogFooter>
+            </div>
           </DialogContent>
         )}
       </Dialog>

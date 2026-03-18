@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { DashboardSidebar } from '@/components/dashboard-sidebar'
 import { MobileNav } from '@/components/mobile-nav'
 import { useApp } from '@/lib/app-context'
@@ -9,12 +9,23 @@ import { useApp } from '@/lib/app-context'
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { currentUser, loading } = useApp()
   const router = useRouter()
+  const pathname = usePathname()
 
   useEffect(() => {
     if (!loading && !currentUser) {
       router.push('/login')
     }
   }, [loading, currentUser, router])
+
+  useEffect(() => {
+    if (loading || !currentUser) return
+    if (currentUser.role !== 'accounts' && currentUser.role !== 'evangelist') return
+
+    const allowed = ['/dashboard/invoices', '/dashboard/profile', '/dashboard/notifications']
+    if (!allowed.includes(pathname)) {
+      router.replace('/dashboard/invoices')
+    }
+  }, [loading, currentUser, pathname, router])
 
   if (loading || !currentUser) {
     return (

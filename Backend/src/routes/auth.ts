@@ -39,6 +39,8 @@ async function getUserWithPoints(userId: any) {
     rank: 0,
     joinedAt: user.joinedAt,
     bio: user.bio || "",
+    position: (user as any).position || "",
+    interests: (user as any).interests || [],
     badges: user.badges || [],
     createdAt: user.createdAt,
   };
@@ -96,8 +98,9 @@ authRouter.post("/login", async (req, res, next) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Only enforce approval workflow for non-admins and non-finance (finance can log in to handle invoices)
-    if (user.role !== "admin" && user.role !== "finance") {
+    // Only enforce approval workflow for non-admins and non-internal invoice roles
+    // (admin/accounts can log in to handle invoices)
+    if (user.role !== "admin" && user.role !== "finance" && user.role !== "accounts") {
       if (user.status === "pending") {
         return res.status(403).json({ message: "Your account is pending approval by an admin." });
       }
@@ -135,6 +138,46 @@ authRouter.get("/me", requireAuth, async (req: AuthRequest, res, next) => {
     if (!fullUser) {
       return res.status(404).json({ message: "User not found" });
     }
+    res.json(fullUser);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update profile preferences (position + interests)
+authRouter.patch("/me", requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const { position, interests } = req.body as {
+      position?: unknown;
+      interests?: unknown;
+    };
+
+    const cleanPosition =
+      typeof position === "string" ? position.trim().slice(0, 80) : undefined;
+
+    const cleanInterests =
+      Array.isArray(interests) && interests.every((x) => typeof x === "string")
+        ? Array.from(
+            new Set(
+              (interests as string[])
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .slice(0, 12),
+            ),
+          )
+        : undefined;
+
+    const updated = await User.findByIdAndUpdate(
+      userId,
+      {
+        ...(typeof cleanPosition === "string" ? { position: cleanPosition } : {}),
+        ...(Array.isArray(cleanInterests) ? { interests: cleanInterests } : {}),
+      },
+      { new: true, runValidators: true },
+    );
+
+    const fullUser = await getUserWithPoints(updated!._id);
     res.json(fullUser);
   } catch (err) {
     next(err);
