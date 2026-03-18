@@ -743,6 +743,33 @@ export default function InvoicesPage() {
 
               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 
+                <div className="rounded-lg border border-border/50 bg-muted/20 p-4 space-y-2">
+                  <div className="text-sm font-semibold">Payment details (for payout)</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-muted-foreground">Method</span>
+                    <span className="font-medium">
+                      {detailInvoice.paymentMethod === 'upi' ? 'UPI' : 'Bank Transfer'}
+                    </span>
+                    {detailInvoice.paymentMethod === 'upi' ? (
+                      <>
+                        <span className="text-muted-foreground">UPI ID</span>
+                        <span className="font-mono text-primary break-all">
+                          {detailInvoice.upiId || '—'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground">Account holder</span>
+                        <span>{detailInvoice.bankAccountHolderName || '—'}</span>
+                        <span className="text-muted-foreground">Account number</span>
+                        <span className="font-mono">{detailInvoice.bankAccountNumber || '—'}</span>
+                        <span className="text-muted-foreground">IFSC</span>
+                        <span className="font-mono">{detailInvoice.bankIfscCode || '—'}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 <div>
                   <div className="text-sm font-semibold mb-1">Bills link</div>
                   <a
