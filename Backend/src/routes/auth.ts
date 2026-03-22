@@ -98,9 +98,15 @@ authRouter.post("/login", async (req, res, next) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // Legacy DB: migrate removed "finance" role to accounts
+    if ((user as { role: string }).role === "finance") {
+      await User.collection.updateOne({ _id: user._id }, { $set: { role: "accounts" } });
+      user.role = "accounts" as typeof user.role;
+    }
+
     // Only enforce approval workflow for non-admins and non-internal invoice roles
     // (admin/accounts can log in to handle invoices)
-    if (user.role !== "admin" && user.role !== "finance" && user.role !== "accounts") {
+    if (user.role !== "admin" && user.role !== "accounts") {
       if (user.status === "pending") {
         return res.status(403).json({ message: "Your account is pending approval by an admin." });
       }
