@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
-  ClipboardList,
+  LayoutGrid,
   Trophy,
   User,
   Bell,
@@ -18,7 +18,7 @@ import { apiFetch } from '@/lib/api'
 
 const NAV = [
   { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
-  { href: '/dashboard/tasks', label: 'My tasks', icon: ClipboardList },
+  { href: '/dashboard/all-tasks', label: 'Tasks', icon: LayoutGrid },
   { href: '/dashboard/leaderboard', label: 'Board', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
@@ -86,7 +86,9 @@ export function MobileNav() {
             )}
           >
             <Shield className="size-5" />
-            <span className="text-[10px] font-medium">Admin</span>
+            <span className="text-[10px] font-medium">
+              {currentUser?.role === 'admin' ? 'Admin' : 'Program'}
+            </span>
           </Link>
         )}
       </div>
