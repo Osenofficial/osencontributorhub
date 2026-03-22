@@ -6,7 +6,6 @@ export type Role =
   | 'lead'
   | 'associate'
   | 'intern'
-  | 'finance'
   | 'accounts'
   | 'evangelist'
 export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'completed'
