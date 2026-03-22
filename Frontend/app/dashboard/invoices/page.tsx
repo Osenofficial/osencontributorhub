@@ -1,8 +1,10 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CalendarIcon, CheckCircle2, Clock, ExternalLink, Receipt, Send, XCircle } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
+import { InvoiceHubNav } from '@/components/invoice-hub-nav'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -98,7 +100,8 @@ export default function InvoicesPage() {
 
   const isAdmin = role === 'admin'
   const isAccounts = role === 'accounts'
-  const isEvangelist = role === 'evangelist'
+  /** Submitters: everyone except admin & accounts (reviewers). */
+  const canRaiseInvoice = Boolean(role && !['admin', 'accounts'].includes(role))
 
   const [loading, setLoading] = useState(true)
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([])
@@ -144,8 +147,6 @@ export default function InvoicesPage() {
   const pendingAccounts = invoices.filter((i) => i.status === 'pending_accounts')
   const paidInvoices = invoices.filter((i) => i.status === 'paid')
 
-  const myInvoices = invoices
-
   async function refresh() {
     const list = await apiFetch<InvoiceRecord[]>('/dashboard/invoices')
     setInvoices(list)
@@ -163,7 +164,7 @@ export default function InvoicesPage() {
 
   async function handleSubmitForm(e: FormEvent) {
     e.preventDefault()
-    if (!isEvangelist) return
+    if (!canRaiseInvoice) return
 
     const amount = Math.min(MAX_AMOUNT, Math.max(0, parseInt(form.totalAmountClaimed, 10) || 0))
     if (
@@ -320,47 +321,48 @@ export default function InvoicesPage() {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <DashboardTopbar title={title} />
-      <div className="p-6 max-w-4xl mx-auto w-full space-y-6">
-        <div className="glass rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-2">
+      <InvoiceHubNav />
+      <div className="mx-auto w-full max-w-3xl flex-1 space-y-6 px-4 py-6 sm:px-6 md:py-8">
+        <div className="glass rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5">
           <div className="flex items-center gap-2 font-semibold text-amber-600">
-            <Receipt className="size-4" /> OSEN Evangelist Travel Reimbursement
+            <Receipt className="size-4 shrink-0" /> OSEN Travel Reimbursement
           </div>
-          <p className="text-sm text-muted-foreground">
-            Reimbursement up to <strong>₹{MAX_AMOUNT}</strong> per event (travel + food combined). Submit within 5 days of the event.
+          <p className="mt-2 text-sm text-muted-foreground">
+            Up to <strong>₹{MAX_AMOUNT}</strong> per event (travel + food). Submit within 5 days of the event.
           </p>
-          <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+          <ul className="mt-3 text-xs text-muted-foreground list-disc space-y-1 pl-4">
             <li>Event must be pre-approved by OSEN Core Team</li>
             <li>Upload bills to Google Drive and share a public link</li>
-            <li>Fake or edited bills will lead to immediate removal from the OSEN program</li>
+            <li>Fake or edited bills may result in removal from the program</li>
           </ul>
         </div>
 
-        {isEvangelist && (
+        {canRaiseInvoice && (
           <>
-            {submitted ? (
-              <div className="glass rounded-xl border border-green-400/20 bg-green-400/5 p-8 text-center space-y-4">
-                <CheckCircle2 className="size-12 text-green-400 mx-auto" />
-                <h3 className="font-semibold">Submitted successfully</h3>
-                <p className="text-sm text-muted-foreground">Admin will review your invoice first.</p>
-                {myInvoices.length > 0 ? (
-                  <div className="mx-auto max-w-md glass rounded-lg border border-border/40 p-3 flex flex-col gap-2 items-center">
-                    <div className="text-xs text-muted-foreground">Latest invoice status</div>
-                    <StatusBadge status={myInvoices[0].status} />
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => openDetail(myInvoices[0])}>
-                      View details
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Fetching your invoice…</p>
-                )}
-                <Button variant="outline" onClick={() => setSubmitted(false)}>
-                  Submit another
-                </Button>
+            {submitted && (
+              <div className="flex flex-col gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3 text-sm text-emerald-800 dark:text-emerald-300/90">
+                  <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span>Submitted. Admin will review your reimbursement. Track status on Invoice tracking.</span>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/dashboard/invoice-tracking">Invoice tracking</Link>
+                  </Button>
+                  <Button size="sm" onClick={() => setSubmitted(false)}>
+                    Submit another
+                  </Button>
+                </div>
               </div>
-            ) : (
-              <form onSubmit={handleSubmitForm} className="rounded-2xl border border-border bg-card shadow-sm p-6 sm:p-8 space-y-6">
+            )}
+
+            {!submitted && (
+              <form
+                onSubmit={handleSubmitForm}
+                className="space-y-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
+              >
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-foreground">Full name *</label>
@@ -424,7 +426,7 @@ export default function InvoicesPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Event date *</label>
-                  <Popover>
+                  <Popover modal={false}>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
@@ -608,43 +610,11 @@ export default function InvoicesPage() {
                   </label>
                 </div>
 
-                <Button type="submit" disabled={submitting} className="gap-2 h-10">
+                <Button type="submit" disabled={submitting} className="h-10 gap-2">
                   <Send className="size-4" /> Submit reimbursement
                 </Button>
               </form>
             )}
-
-            <div className="glass rounded-xl border border-border/50 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">My submissions</h3>
-                <span className="text-xs text-muted-foreground">{myInvoices.length}</span>
-              </div>
-              {myInvoices.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No submissions yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {myInvoices.map((inv) => (
-                    <div
-                      key={inv._id}
-                      className="flex items-center justify-between gap-4 glass rounded-lg border border-border/40 p-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{inv.eventName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(inv.eventDate).toLocaleDateString('en-IN')} · ₹{inv.totalAmountClaimed}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <StatusBadge status={inv.status} />
-                        <Button size="sm" variant="ghost" onClick={() => openDetail(inv)}>
-                          View
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </>
         )}
 
@@ -713,7 +683,11 @@ export default function InvoicesPage() {
 
         <Dialog open={!!detailInvoice} onOpenChange={(o) => !o && setDetailInvoice(null)}>
           {detailInvoice && (
-            <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 flex flex-col">
+            <DialogContent
+              className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden p-0"
+              onOpenAutoFocus={(e) => e.preventDefault()}
+              onCloseAutoFocus={(e) => e.preventDefault()}
+            >
               <div className="px-6 pt-6 pb-3 border-b border-border/50">
                 <DialogHeader>
                   <DialogTitle className="text-base">{detailInvoice.eventName}</DialogTitle>
@@ -923,12 +897,10 @@ export default function InvoicesPage() {
                 )}
               </div>
 
-              <div className="border-t border-border/50 bg-muted/20 px-6 py-4">
-                <DialogFooter className="gap-2">
-                  <Button variant="ghost" onClick={() => setDetailInvoice(null)}>
-                    Close
-                  </Button>
-                </DialogFooter>
+              <div className="flex justify-end border-t border-border/50 bg-muted/10 px-6 py-3">
+                <Button variant="ghost" size="sm" onClick={() => setDetailInvoice(null)}>
+                  Close
+                </Button>
               </div>
             </DialogContent>
           )}
