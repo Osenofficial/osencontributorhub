@@ -56,7 +56,7 @@ const TaskSchema = new mongoose_1.Schema({
         default: "medium",
     },
     points: { type: Number, default: 0, min: 0 },
-    assignedTo: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    assignedTo: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     createdBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
     deadline: { type: Date },
     submission: {
