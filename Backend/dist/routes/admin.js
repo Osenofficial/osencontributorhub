@@ -104,6 +104,9 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
     try {
         const adminId = req.user._id;
         const { title, description, points, assignedTo, deadline, category, contributionType, priority } = req.body;
+        const assigneeId = assignedTo != null && String(assignedTo).trim() !== "" && assignedTo !== "__pool__"
+            ? assignedTo
+            : null;
         const task = await Task_1.Task.create({
             title,
             description,
@@ -111,7 +114,7 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
             category,
             contributionType,
             priority,
-            assignedTo,
+            assignedTo: assigneeId,
             createdBy: adminId,
             deadline,
             history: [
@@ -121,15 +124,17 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
                     fromStatus: "todo",
                     toStatus: "todo",
                     createdAt: new Date(),
-                    meta: { assignedTo },
+                    meta: { assignedTo: assigneeId },
                 },
             ],
         });
-        await Notification_1.Notification.create({
-            user: assignedTo,
-            title: "New Task Assigned",
-            message: title,
-        });
+        if (assigneeId) {
+            await Notification_1.Notification.create({
+                user: assigneeId,
+                title: "New Task Assigned",
+                message: title,
+            });
+        }
         res.status(201).json(task);
     }
     catch (err) {
@@ -148,28 +153,79 @@ exports.adminRouter.get("/tasks", (0, auth_1.requireRole)("admin", "lead"), asyn
         next(err);
     }
 });
+const CREATOR_EDIT_FIELDS = [
+    "title",
+    "description",
+    "deadline",
+    "category",
+    "contributionType",
+    "priority",
+    "assignedTo",
+    "points",
+];
 exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead"), async (req, res, next) => {
     try {
-        const { status, points } = req.body;
         const task = await Task_1.Task.findById(req.params.id);
         if (!task) {
             return res.status(404).json({ message: "Task not found" });
         }
+        const hasCreatorUpdates = CREATOR_EDIT_FIELDS.some((k) => req.body[k] !== undefined);
+        if (hasCreatorUpdates) {
+            if (String(task.createdBy) !== String(req.user._id)) {
+                return res.status(403).json({ message: "Only the task creator can edit task details" });
+            }
+            const { title, description, deadline, category, contributionType, priority, assignedTo, points } = req.body;
+            if (title !== undefined)
+                task.title = String(title).trim();
+            if (description !== undefined)
+                task.description = String(description ?? "");
+            if (deadline !== undefined) {
+                task.deadline = deadline ? new Date(deadline) : undefined;
+            }
+            if (category !== undefined)
+                task.category = category;
+            if (contributionType !== undefined)
+                task.contributionType = contributionType;
+            if (priority !== undefined)
+                task.priority = priority;
+            if (assignedTo !== undefined) {
+                const assigneeId = assignedTo != null &&
+                    String(assignedTo).trim() !== "" &&
+                    assignedTo !== "__pool__"
+                    ? assignedTo
+                    : null;
+                task.assignedTo = assigneeId;
+            }
+            if (points !== undefined) {
+                const p = Math.min(100, Math.max(1, parseInt(String(points), 10) || 10));
+                task.points = p;
+            }
+            task.history.push({
+                actor: req.user._id,
+                action: "edited",
+                fromStatus: task.status,
+                toStatus: task.status,
+                createdAt: new Date(),
+                meta: { fields: CREATOR_EDIT_FIELDS.filter((k) => req.body[k] !== undefined) },
+            });
+        }
         const fromStatus = task.status;
-        if (status) {
-            task.status = status;
+        if (req.body.status !== undefined) {
+            task.status = req.body.status;
         }
-        if (typeof points === "number") {
-            task.points = points;
+        const statusChanged = fromStatus !== task.status;
+        if (statusChanged) {
+            task.history.push({
+                actor: req.user._id,
+                action: "admin_update",
+                fromStatus,
+                toStatus: task.status,
+                createdAt: new Date(),
+                meta: req.body.points !== undefined && typeof req.body.points === "number"
+                    ? { points: req.body.points }
+                    : undefined,
+            });
         }
-        task.history.push({
-            actor: req.user._id,
-            action: "admin_update",
-            fromStatus,
-            toStatus: task.status,
-            createdAt: new Date(),
-            meta: typeof points === "number" ? { points } : undefined,
-        });
         await task.save();
         if (fromStatus === "submitted" && task.status === "completed" && task.assignedTo) {
             await Notification_1.Notification.create({
@@ -178,7 +234,18 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 message: `Your submission for "${task.title}" has been approved!`,
             });
         }
-        res.json(task);
+        if (fromStatus === "submitted" && task.status === "in_progress" && task.assignedTo) {
+            await Notification_1.Notification.create({
+                user: task.assignedTo,
+                title: "Submission needs revision",
+                message: `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+            });
+        }
+        const populated = await Task_1.Task.findById(task._id)
+            .populate("assignedTo", "name email")
+            .populate("createdBy", "name email")
+            .populate("pendingAssignmentRequests.user", "name email");
+        res.json(populated);
     }
     catch (err) {
         next(err);
