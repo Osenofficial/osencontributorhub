@@ -21,8 +21,9 @@ exports.dashboardRouter.get("/overview", async (req, res, next) => {
             Task_1.Task.find()
                 .populate("assignedTo", "name email")
                 .populate("createdBy", "name email")
+                .populate("pendingAssignmentRequests.user", "name email")
                 .sort({ createdAt: -1 })
-                .limit(50),
+                .limit(500),
         ]);
         res.json({
             totalTasks,
@@ -110,6 +111,7 @@ exports.dashboardRouter.get("/tasks", async (req, res, next) => {
         const tasks = await Task_1.Task.find(filter)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
+            .populate("pendingAssignmentRequests.user", "name email")
             .sort({ createdAt: -1 });
         res.json(tasks);
     }
@@ -117,10 +119,16 @@ exports.dashboardRouter.get("/tasks", async (req, res, next) => {
         next(err);
     }
 });
-/** Claim an open pool task (no assignee, status todo). */
+/** Claim an open pool task — only admin/lead (instant). Contributors use POST .../request-assignment. */
 exports.dashboardRouter.post("/tasks/:id/claim", async (req, res, next) => {
     try {
         const userId = req.user._id;
+        const role = req.user.role;
+        if (!["admin", "lead"].includes(role)) {
+            return res.status(403).json({
+                message: "Contributors must request assignment. Use “Request assignment” — an admin or lead will approve.",
+            });
+        }
         const task = await Task_1.Task.findById(req.params.id);
         if (!task) {
             return res.status(404).json({ message: "Task not found" });
@@ -131,6 +139,7 @@ exports.dashboardRouter.post("/tasks/:id/claim", async (req, res, next) => {
         if (task.status !== "todo") {
             return res.status(400).json({ message: "Only open pool tasks can be claimed" });
         }
+        task.pendingAssignmentRequests = [];
         task.assignedTo = userId;
         task.history.push({
             actor: userId,
@@ -147,59 +156,156 @@ exports.dashboardRouter.post("/tasks/:id/claim", async (req, res, next) => {
         });
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
-            .populate("createdBy", "name email");
+            .populate("createdBy", "name email")
+            .populate("pendingAssignmentRequests.user", "name email");
         res.json(updated);
     }
     catch (err) {
         next(err);
     }
 });
-exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
+/** Contributor asks to be assigned to an open pool task — admin/lead approves in Admin panel. */
+exports.dashboardRouter.post("/tasks/:id/request-assignment", async (req, res, next) => {
     try {
         const userId = req.user._id;
-        const { status, submission, assignedTo: newAssigneeId } = req.body;
-        const task = await Task_1.Task.findOne({ _id: req.params.id, assignedTo: userId }).populate("assignedTo", "name email");
+        const role = req.user.role;
+        if (["admin", "lead"].includes(role)) {
+            return res.status(400).json({
+                message: "Use Claim to assign yourself instantly, or manage tasks from the Admin panel.",
+            });
+        }
+        const task = await Task_1.Task.findById(req.params.id);
         if (!task) {
             return res.status(404).json({ message: "Task not found" });
         }
-        const currentAssigneeStr = task.assignedTo?._id?.toString?.() ?? task.assignedTo?.toString?.();
-        if (newAssigneeId && currentAssigneeStr && newAssigneeId !== currentAssigneeStr) {
-            task.assignedTo = newAssigneeId;
+        if (task.assignedTo != null) {
+            return res.status(400).json({ message: "This task is already assigned to someone" });
+        }
+        if (task.status !== "todo") {
+            return res.status(400).json({ message: "Only open tasks can be requested" });
+        }
+        const requests = task.pendingAssignmentRequests || [];
+        if (requests.some((p) => p.user.toString() === userId.toString())) {
+            return res.status(400).json({ message: "You already have a pending request for this task" });
+        }
+        requests.push({ user: userId, requestedAt: new Date() });
+        task.pendingAssignmentRequests = requests;
+        task.history.push({
+            actor: userId,
+            action: "request_assignment",
+            fromStatus: task.status,
+            toStatus: task.status,
+            createdAt: new Date(),
+        });
+        await task.save();
+        const requesterName = req.user.name || "A contributor";
+        const managers = await User_1.User.find({ role: { $in: ["admin", "lead"] } }).select("_id");
+        for (const m of managers) {
+            await Notification_1.Notification.create({
+                user: m._id,
+                title: "Assignment request",
+                message: `${requesterName} wants to work on "${task.title}"`,
+            });
+        }
+        const updated = await Task_1.Task.findById(task._id)
+            .populate("assignedTo", "name email")
+            .populate("createdBy", "name email")
+            .populate("pendingAssignmentRequests.user", "name email");
+        res.json(updated);
+    }
+    catch (err) {
+        next(err);
+    }
+});
+/**
+ * Assignee-only updates: safe status transitions + submission links/comments.
+ * Reassignment is not allowed here (use admin flows).
+ */
+exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
+    try {
+        const userId = req.user._id;
+        const { status: bodyStatus, submission: submissionBody } = req.body;
+        const task = await Task_1.Task.findOne({ _id: req.params.id, assignedTo: userId });
+        if (!task) {
+            return res.status(404).json({ message: "Task not found or not assigned to you" });
+        }
+        if (task.status === "completed") {
+            return res.status(400).json({ message: "This task is completed and cannot be changed" });
+        }
+        if (bodyStatus !== undefined) {
+            const nextStatus = bodyStatus;
+            const cur = task.status;
+            const allowed = (cur === "todo" && nextStatus === "in_progress") ||
+                (cur === "in_progress" && nextStatus === "submitted") ||
+                (cur === "submitted" && nextStatus === "submitted");
+            if (!allowed) {
+                return res.status(400).json({
+                    message: "Invalid status change. Start the task (to in progress), submit for review, or keep it submitted while you update your submission.",
+                });
+            }
+            if (nextStatus !== cur) {
+                const fromStatus = task.status;
+                task.status = nextStatus;
+                task.history.push({
+                    actor: userId,
+                    action: "status_update",
+                    fromStatus,
+                    toStatus: nextStatus,
+                    createdAt: new Date(),
+                    meta: submissionBody && typeof submissionBody === "object" ? { hasSubmission: true } : undefined,
+                });
+                if (nextStatus === "submitted") {
+                    const base = task.submission || {};
+                    task.submission = {
+                        githubLink: base.githubLink,
+                        notionLink: base.notionLink,
+                        googleDoc: base.googleDoc,
+                        comments: base.comments,
+                        submittedAt: new Date(),
+                    };
+                }
+            }
+        }
+        if (submissionBody && typeof submissionBody === "object") {
+            if (!["in_progress", "submitted"].includes(task.status)) {
+                return res.status(400).json({
+                    message: "You can add or edit submission details while the task is in progress or waiting for review.",
+                });
+            }
+            const prev = task.submission || {};
+            const merged = {
+                githubLink: submissionBody.githubLink !== undefined
+                    ? String(submissionBody.githubLink ?? "").trim()
+                    : prev.githubLink ?? "",
+                notionLink: submissionBody.notionLink !== undefined
+                    ? String(submissionBody.notionLink ?? "").trim()
+                    : prev.notionLink ?? "",
+                googleDoc: submissionBody.googleDoc !== undefined
+                    ? String(submissionBody.googleDoc ?? "").trim()
+                    : prev.googleDoc ?? "",
+                comments: submissionBody.comments !== undefined
+                    ? String(submissionBody.comments ?? "").trim()
+                    : prev.comments ?? "",
+                submittedAt: task.status === "submitted"
+                    ? new Date()
+                    : prev.submittedAt != null
+                        ? prev.submittedAt
+                        : undefined,
+            };
+            task.submission = merged;
             task.history.push({
                 actor: userId,
-                action: "reassigned",
+                action: "submission_updated",
                 fromStatus: task.status,
                 toStatus: task.status,
                 createdAt: new Date(),
-                meta: { assignedTo: newAssigneeId },
-            });
-            await Notification_1.Notification.create({
-                user: newAssigneeId,
-                title: "Task Assigned to You",
-                message: task.title,
-            });
-        }
-        const fromStatus = task.status;
-        if (status) {
-            task.status = status;
-        }
-        if (submission) {
-            task.submission = submission;
-        }
-        if (status) {
-            task.history.push({
-                actor: userId,
-                action: "status_update",
-                fromStatus,
-                toStatus: status,
-                createdAt: new Date(),
-                meta: submission ? { hasSubmission: true } : undefined,
             });
         }
         await task.save();
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
-            .populate("createdBy", "name email");
+            .populate("createdBy", "name email")
+            .populate("pendingAssignmentRequests.user", "name email");
         res.json(updated);
     }
     catch (err) {
