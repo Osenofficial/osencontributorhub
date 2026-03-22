@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -10,6 +10,9 @@ import {
   Sparkles,
   UserCircle,
   CalendarRange,
+  Pencil,
+  Send,
+  PlayCircle,
 } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { StatusBadge } from '@/components/status-badge'
@@ -31,6 +34,9 @@ import {
 import { TaskComments } from '@/components/task-comments'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
@@ -70,8 +76,43 @@ export default function AllTasksPage() {
   const [requestingId, setRequestingId] = useState<string | null>(null)
   const [viewTask, setViewTask] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
+  const [submissionDraft, setSubmissionDraft] = useState({
+    githubLink: '',
+    notionLink: '',
+    googleDoc: '',
+    comments: '',
+  })
+  const [submissionSaving, setSubmissionSaving] = useState(false)
+  const [startTaskLoading, setStartTaskLoading] = useState(false)
+  /** Eye = read-only modal; Pencil = editable (submission / start task). */
+  const [taskDetailMode, setTaskDetailMode] = useState<'view' | 'edit' | null>(null)
+  /** When set, dialog scrolls to assignee edit/start section after open (pencil on card). */
+  const [scrollAssigneeSectionTaskId, setScrollAssigneeSectionTaskId] = useState<string | null>(null)
+  const assigneeActionsRef = useRef<HTMLDivElement>(null)
 
   const isManager = currentUser?.role === 'admin' || currentUser?.role === 'lead'
+
+  useEffect(() => {
+    if (!viewTask || !scrollAssigneeSectionTaskId) return
+    const id = String(viewTask._id ?? viewTask.id)
+    if (id !== scrollAssigneeSectionTaskId) return
+    const timer = window.setTimeout(() => {
+      assigneeActionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      setScrollAssigneeSectionTaskId(null)
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [viewTask, scrollAssigneeSectionTaskId])
+
+  useEffect(() => {
+    if (!viewTask) return
+    const s = viewTask.submission || {}
+    setSubmissionDraft({
+      githubLink: typeof s.githubLink === 'string' ? s.githubLink : '',
+      notionLink: typeof s.notionLink === 'string' ? s.notionLink : '',
+      googleDoc: typeof (s as { googleDoc?: string }).googleDoc === 'string' ? (s as { googleDoc?: string }).googleDoc! : '',
+      comments: typeof s.comments === 'string' ? s.comments : '',
+    })
+  }, [viewTask])
 
   useEffect(() => {
     setLoading(true)
@@ -173,6 +214,52 @@ export default function AllTasksPage() {
       .finally(() => setRequestingId(null))
   }
 
+  async function patchMyTask(
+    taskId: string,
+    body: { status?: string; submission?: typeof submissionDraft },
+  ) {
+    return apiFetch<any>(`/dashboard/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  }
+
+  async function handleSaveSubmission(options?: { alsoSubmit?: boolean }) {
+    const id = viewTask?._id ?? viewTask?.id
+    if (!id || !viewTask) return
+    setSubmissionSaving(true)
+    try {
+      const payload: { status?: string; submission: typeof submissionDraft } = {
+        submission: submissionDraft,
+      }
+      if (options?.alsoSubmit && viewTask.status === 'in_progress') {
+        payload.status = 'submitted'
+      }
+      const updated = await patchMyTask(String(id), payload)
+      setViewTask(updated)
+      refreshFeed()
+    } catch {
+      /* toast optional */
+    } finally {
+      setSubmissionSaving(false)
+    }
+  }
+
+  async function handleStartAssignedTask() {
+    const id = viewTask?._id ?? viewTask?.id
+    if (!id || !viewTask || viewTask.status !== 'todo') return
+    setStartTaskLoading(true)
+    try {
+      const updated = await patchMyTask(String(id), { status: 'in_progress' })
+      setViewTask(updated)
+      refreshFeed()
+    } catch {
+      /* */
+    } finally {
+      setStartTaskLoading(false)
+    }
+  }
+
   function renderTaskBox(task: any) {
     const tid = task._id ?? task.id
     const createdBy = task.createdBy
@@ -182,6 +269,10 @@ export default function AllTasksPage() {
     const canRequest =
       isPool && Boolean(currentUser?.id) && !isManager && !userHasPendingAssignment(task, currentUser?.id)
     const pendingMine = isPool && userHasPendingAssignment(task, currentUser?.id)
+    const assigneeId = assignee?._id ?? assignee
+    const taskAssignedToMe =
+      Boolean(currentUser?.id && assigneeId != null && String(assigneeId) === String(currentUser.id))
+    const showCardEditPencil = taskAssignedToMe && !isPool && task.status !== 'completed'
     const dateStr = task.createdAt
       ? new Date(task.createdAt).toLocaleString('en-IN', {
           day: 'numeric',
@@ -240,11 +331,32 @@ export default function AllTasksPage() {
               variant="outline"
               size="sm"
               className="h-8 gap-1.5"
-              onClick={() => setViewTask(task)}
+              onClick={() => {
+                setScrollAssigneeSectionTaskId(null)
+                setTaskDetailMode('view')
+                setViewTask(task)
+              }}
             >
               <Eye className="size-3.5" />
               View
             </Button>
+            {showCardEditPencil && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                title="Edit submission / start task"
+                className="h-8 w-8 shrink-0 p-0 text-primary hover:text-primary hover:bg-primary/10"
+                onClick={() => {
+                  setTaskDetailMode('edit')
+                  setViewTask(task)
+                  setScrollAssigneeSectionTaskId(String(tid))
+                }}
+              >
+                <Pencil className="size-3.5" />
+                <span className="sr-only">Edit task</span>
+              </Button>
+            )}
             {canClaimPool && (
               <Button
                 size="sm"
@@ -280,6 +392,15 @@ export default function AllTasksPage() {
   const vt = viewTask
   const vtId = vt?._id ?? vt?.id
   const vtPool = vt?.status === 'todo' && !vt?.assignedTo
+  const vtAssigneeId = vt?.assignedTo?._id ?? vt?.assignedTo
+  const vtMine =
+    Boolean(currentUser?.id && vtAssigneeId != null && String(vtAssigneeId) === String(currentUser.id))
+  const canEditSubmission = vtMine && (vt?.status === 'in_progress' || vt?.status === 'submitted')
+  const canStartAssigned = vtMine && vt?.status === 'todo' && !vtPool
+  const dialogEditable = taskDetailMode === 'edit'
+  const showAssigneeEditPanel = dialogEditable && (canStartAssigned || canEditSubmission)
+  const showReadOnlySubmission =
+    Boolean(vt?.submission) && (!dialogEditable || !canEditSubmission)
 
   return (
     <div className="flex min-h-full flex-col">
@@ -463,7 +584,16 @@ export default function AllTasksPage() {
         </div>
       </div>
 
-      <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
+      <Dialog
+        open={!!viewTask}
+        onOpenChange={(o) => {
+          if (!o) {
+            setViewTask(null)
+            setTaskDetailMode(null)
+            setScrollAssigneeSectionTaskId(null)
+          }
+        }}
+      >
         <DialogContent className="max-w-lg border-border bg-card shadow-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{vt?.title}</DialogTitle>
@@ -501,7 +631,112 @@ export default function AllTasksPage() {
               <StatusBadge value={vt?.status} type="status" />
               <span className="text-sm font-mono text-primary font-semibold">{vt?.points} pts</span>
             </div>
-            {vt?.submission && (
+
+            {taskDetailMode === 'view' && vtMine && (canStartAssigned || canEditSubmission) && (
+              <p className="flex items-start gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground leading-relaxed">
+                <Pencil className="mt-0.5 size-3.5 shrink-0 text-primary/80" aria-hidden />
+                <span>
+                  This is a read-only view. Use the <strong className="text-foreground/90">pencil</strong> on the
+                  task card to start the task or edit your submission.
+                </span>
+              </p>
+            )}
+
+            {showAssigneeEditPanel && (
+              <div ref={assigneeActionsRef} className="space-y-4 scroll-mt-6">
+            {canStartAssigned && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                <p className="text-xs font-medium text-foreground">Assigned to you — mark it in progress when you start.</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={startTaskLoading}
+                  onClick={() => void handleStartAssignedTask()}
+                >
+                  <PlayCircle className="size-4" />
+                  {startTaskLoading ? 'Starting…' : 'Start task'}
+                </Button>
+              </div>
+            )}
+
+            {canEditSubmission && (
+              <div className="rounded-lg border border-primary/25 bg-muted/20 p-3 space-y-3">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Pencil className="size-4 text-primary" />
+                  Your submission
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  You can edit proof links and notes while the task is <strong>in progress</strong> or{' '}
+                  <strong>submitted</strong> (waiting for review). Points and task title are set by admins/leads.
+                </p>
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">GitHub</Label>
+                    <Input
+                      className="h-9 text-sm bg-background"
+                      placeholder="https://github.com/…"
+                      value={submissionDraft.githubLink}
+                      onChange={(e) => setSubmissionDraft((d) => ({ ...d, githubLink: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Notion</Label>
+                    <Input
+                      className="h-9 text-sm bg-background"
+                      placeholder="https://notion.so/…"
+                      value={submissionDraft.notionLink}
+                      onChange={(e) => setSubmissionDraft((d) => ({ ...d, notionLink: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Google Doc</Label>
+                    <Input
+                      className="h-9 text-sm bg-background"
+                      placeholder="https://docs.google.com/…"
+                      value={submissionDraft.googleDoc}
+                      onChange={(e) => setSubmissionDraft((d) => ({ ...d, googleDoc: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Notes for reviewers</Label>
+                    <Textarea
+                      className="min-h-[72px] text-sm bg-background resize-none"
+                      placeholder="What did you deliver? Anything reviewers should know?"
+                      value={submissionDraft.comments}
+                      onChange={(e) => setSubmissionDraft((d) => ({ ...d, comments: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={submissionSaving}
+                    onClick={() => void handleSaveSubmission()}
+                  >
+                    {submissionSaving ? 'Saving…' : 'Save submission'}
+                  </Button>
+                  {vt?.status === 'in_progress' && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={submissionSaving}
+                      onClick={() => void handleSaveSubmission({ alsoSubmit: true })}
+                    >
+                      <Send className="size-3.5" />
+                      {submissionSaving ? 'Sending…' : 'Save & submit for review'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+              </div>
+            )}
+
+            {showReadOnlySubmission && (
               <div className="rounded-lg border border-border/50 p-3 text-xs space-y-1">
                 <div className="font-semibold">Submission</div>
                 {vt.submission.githubLink && (
@@ -522,6 +757,16 @@ export default function AllTasksPage() {
                     className="block truncate text-primary hover:underline"
                   >
                     {vt.submission.notionLink}
+                  </a>
+                )}
+                {(vt.submission as { googleDoc?: string }).googleDoc && (
+                  <a
+                    href={(vt.submission as { googleDoc?: string }).googleDoc}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block truncate text-primary hover:underline"
+                  >
+                    {(vt.submission as { googleDoc?: string }).googleDoc}
                   </a>
                 )}
                 {vt.submission.comments && (
