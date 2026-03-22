@@ -28,7 +28,7 @@ exports.adminRouter.get("/stats", (0, auth_1.requireRole)("admin", "lead"), asyn
     }
 });
 // User list - admins only
-exports.adminRouter.get("/users", (0, auth_1.requireRole)("admin"), async (_req, res, next) => {
+exports.adminRouter.get("/users", (0, auth_1.requireRole)("admin", "lead"), async (_req, res, next) => {
     try {
         const users = await User_1.User.find().sort({ createdAt: -1 }).select("-passwordHash");
         res.json(users);
