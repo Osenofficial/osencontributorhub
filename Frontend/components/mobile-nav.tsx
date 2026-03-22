@@ -10,6 +10,7 @@ import {
   Bell,
   Shield,
   Receipt,
+  Send,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -19,6 +20,7 @@ import { apiFetch } from '@/lib/api'
 const NAV = [
   { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
   { href: '/dashboard/all-tasks', label: 'Tasks', icon: LayoutGrid },
+  { href: '/dashboard/submit-task', label: 'Submit', icon: Send },
   { href: '/dashboard/leaderboard', label: 'Board', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
@@ -27,12 +29,14 @@ const NAV = [
 
 const NAV_INVOICES = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/submit-task', label: 'Submit', icon: Send },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
 ]
 
 const NAV_ACCOUNTS = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/submit-task', label: 'Submit', icon: Send },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
 ]
