@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
-  ClipboardList,
   LayoutGrid,
   Trophy,
   User,
@@ -13,6 +12,7 @@ import {
   Shield,
   Star,
   Receipt,
+  Users,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -22,7 +22,6 @@ import { apiFetch } from '@/lib/api'
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/tasks', label: 'My tasks', icon: ClipboardList },
   { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
   { href: '/dashboard/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
@@ -40,10 +39,6 @@ const NAV_ITEMS_INVOICES_ACCOUNTS = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
-]
-
-const ADMIN_NAV_ITEMS = [
-  { href: '/dashboard/admin', label: 'Admin Panel', icon: Shield },
 ]
 
 export function DashboardSidebar() {
@@ -104,26 +99,29 @@ export function DashboardSidebar() {
         {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && (
           <>
             <div className="mt-4 mb-2 px-3">
-              <div className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-semibold">Admin</div>
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-semibold">
+                {currentUser?.role === 'admin' ? 'Administration' : 'Program'}
+              </div>
             </div>
-            {ADMIN_NAV_ITEMS.map((item) => {
-              const active = pathname === item.href
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all',
-                    active
-                      ? 'bg-primary/15 text-primary border border-primary/20'
-                      : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                  )}
-                >
-                  <item.icon className={cn('size-4 shrink-0', active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
-                  {item.label}
-                </Link>
-              )
-            })}
+            <Link
+              href="/dashboard/admin"
+              className={cn(
+                'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all',
+                pathname === '/dashboard/admin'
+                  ? 'bg-primary/15 text-primary border border-primary/20'
+                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+              )}
+            >
+              <Shield
+                className={cn(
+                  'size-4 shrink-0',
+                  pathname === '/dashboard/admin'
+                    ? 'text-primary'
+                    : 'text-muted-foreground group-hover:text-foreground',
+                )}
+              />
+              {currentUser?.role === 'admin' ? 'Admin Panel' : 'Program'}
+            </Link>
           </>
         )}
       </nav>
@@ -137,6 +135,8 @@ export function DashboardSidebar() {
             <div className="text-xs text-muted-foreground flex items-center gap-1">
               {currentUser.role === 'admin' ? (
                 <><Shield className="size-3 text-primary" /> Admin</>
+              ) : currentUser.role === 'lead' ? (
+                <><Users className="size-3 text-cyan-400" /> Lead</>
               ) : currentUser.role === 'accounts' ? (
                 <><Receipt className="size-3 text-primary" /> Accounts</>
               ) : currentUser.role === 'evangelist' ? (
