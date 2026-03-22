@@ -47,7 +47,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <DashboardSidebar />
       </div>
       {/* Main: min-h-0 + overscroll avoids scroll chaining / jump; pb reserves space for fixed mobile nav */}
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain pb-[calc(4rem+env(safe-area-inset-bottom,0px))] md:pb-0 [scrollbar-gutter:stable]">
+      {/* Extra bottom padding on mobile so content clears the fixed bottom nav + iOS home indicator */}
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] scroll-pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] md:pb-0 md:scroll-pb-0 [scrollbar-gutter:stable]">
         {children}
       </main>
       {/* Mobile bottom nav */}

@@ -52,45 +52,49 @@ export function MobileNav() {
       .catch(() => setUnread(0))
   }, [currentUser?.id])
 
+  const role = currentUser?.role
+  const navItems =
+    role === 'accounts' ? NAV_ACCOUNTS : role === 'evangelist' ? NAV_INVOICES : NAV
+  const showProgramLink =
+    (currentUser?.role === 'admin' || currentUser?.role === 'lead') &&
+    currentUser?.role !== 'accounts' &&
+    currentUser?.role !== 'evangelist'
+
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-50 border-t border-border/50 bg-sidebar/95 backdrop-blur-sm md:hidden">
-      <div className="flex items-center justify-around px-2 py-2">
-        {(() => {
-          const role = currentUser?.role
-          if (role === 'accounts') return NAV_ACCOUNTS
-          if (role === 'evangelist') return NAV_INVOICES
-          return NAV
-        })().map((item) => {
+    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border/50 bg-sidebar/95 pb-[env(safe-area-inset-bottom,0px)] pt-1 backdrop-blur-sm md:hidden">
+      {/* Horizontal scroll keeps one row so bar height stays stable; content above gets consistent pb in layout */}
+      <div className="flex max-h-[4.25rem] items-stretch justify-start gap-0 overflow-x-auto overflow-y-hidden overscroll-x-contain px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {navItems.map((item) => {
           const active = pathname === item.href
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                'flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all relative',
+                'flex min-w-[3.25rem] shrink-0 flex-col items-center gap-0.5 px-2 py-1.5 transition-all relative',
                 active ? 'text-primary' : 'text-muted-foreground',
               )}
             >
-              <item.icon className="size-5" />
-              <span className="text-[10px] font-medium">{item.label}</span>
+              <item.icon className="size-5 shrink-0" />
+              <span className="max-w-[3.5rem] truncate text-center text-[9px] font-medium leading-tight sm:text-[10px]">
+                {item.label}
+              </span>
               {item.label === 'Alerts' && unread > 0 && (
-                <span className="absolute top-1 right-1.5 flex size-2 rounded-full bg-primary animate-pulse-glow" />
+                <span className="absolute top-0.5 right-1 flex size-2 rounded-full bg-primary animate-pulse-glow" />
               )}
             </Link>
           )
         })}
-        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') &&
-          currentUser?.role !== 'accounts' &&
-          currentUser?.role !== 'evangelist' && (
+        {showProgramLink && (
           <Link
             href="/dashboard/admin"
             className={cn(
-              'flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all',
+              'flex min-w-[3.25rem] shrink-0 flex-col items-center gap-0.5 px-2 py-1.5 transition-all',
               pathname === '/dashboard/admin' ? 'text-primary' : 'text-muted-foreground',
             )}
           >
-            <Shield className="size-5" />
-            <span className="text-[10px] font-medium">
+            <Shield className="size-5 shrink-0" />
+            <span className="max-w-[3.5rem] truncate text-center text-[9px] font-medium leading-tight sm:text-[10px]">
               {currentUser?.role === 'admin' ? 'Admin' : 'Program'}
             </span>
           </Link>
