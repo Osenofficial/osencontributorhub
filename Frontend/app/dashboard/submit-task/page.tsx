@@ -13,9 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { CONTRIBUTION_TYPES, type TaskCategory } from '@/lib/contribution-types'
+import { CONTRIBUTION_TYPES, findContributionItemById, type TaskCategory } from '@/lib/contribution-types'
 import { apiFetch } from '@/lib/api'
-import { cn } from '@/lib/utils'
 
 export default function SubmitTaskPage() {
   const [submitted, setSubmitted] = useState(false)
@@ -33,7 +32,7 @@ export default function SubmitTaskPage() {
   })
 
   function handleContributionTypeChange(value: string) {
-    const match = CONTRIBUTION_TYPES.flatMap((g) => g.items).find((i) => i.id === value)
+    const match = findContributionItemById(value)
     setForm((f) => ({
       ...f,
       contributionType: value,
@@ -147,11 +146,11 @@ export default function SubmitTaskPage() {
 
           <div className="glass rounded-2xl border p-6 space-y-4">
             <h3 className="font-semibold text-sm">Contribution type & points</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-6">
+              <div className="min-w-0 flex-1 space-y-2">
                 <label className="text-sm font-medium">Contribution type <span className="text-destructive">*</span></label>
                 <Select value={form.contributionType} onValueChange={handleContributionTypeChange}>
-                  <SelectTrigger className="bg-background border-border">
+                  <SelectTrigger className="h-auto min-h-10 w-full min-w-0 bg-background border-border py-2.5 whitespace-normal !w-full items-start [&_[data-slot=select-value]]:whitespace-normal [&_[data-slot=select-value]]:text-left [&_[data-slot=select-value]]:items-start">
                     <SelectValue placeholder="Choose a type..." />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border max-h-72">
@@ -173,7 +172,7 @@ export default function SubmitTaskPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="w-full shrink-0 space-y-2 lg:w-36">
                 <label className="text-sm font-medium">Points</label>
                 <Input
                   type="number"
@@ -181,7 +180,7 @@ export default function SubmitTaskPage() {
                   max={100}
                   value={form.points}
                   onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
-                  className="bg-background border-border"
+                  className="w-full bg-background border-border"
                 />
                 <p className="text-xs text-muted-foreground">Payout by monthly points tier (min 10 pts) · Cap 100 pts = ₹5000</p>
               </div>
