@@ -5,14 +5,13 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
   ClipboardList,
+  LayoutGrid,
   Trophy,
   User,
   Bell,
   Zap,
   Shield,
   Star,
-  CalendarRange,
-  Send,
   Receipt,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -23,22 +22,21 @@ import { apiFetch } from '@/lib/api'
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/tasks', label: 'Tasks', icon: ClipboardList },
+  { href: '/dashboard/tasks', label: 'My tasks', icon: ClipboardList },
+  { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
   { href: '/dashboard/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
-  { href: '/dashboard/report', label: 'Contribution Report', icon: CalendarRange },
-  { href: '/dashboard/invoices', label: 'Submit Invoices', icon: Receipt },
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
 ]
 
-const NAV_ITEMS_FINANCE = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/invoices', label: 'Submit Invoices', icon: Receipt },
+const NAV_ITEMS_INVOICES_EVANGELIST = [
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
 ]
 
-const NAV_ITEMS_INVOICES = [
+const NAV_ITEMS_INVOICES_ACCOUNTS = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
@@ -76,8 +74,8 @@ export function DashboardSidebar() {
       <nav className="flex-1 space-y-1">
         {(() => {
           const role = currentUser?.role
-          if (role === 'accounts' || role === 'evangelist') return NAV_ITEMS_INVOICES
-          if (role === 'finance') return NAV_ITEMS_FINANCE
+          if (role === 'accounts') return NAV_ITEMS_INVOICES_ACCOUNTS
+          if (role === 'evangelist') return NAV_ITEMS_INVOICES_EVANGELIST
           return NAV_ITEMS
         })().map((item) => {
           const active = pathname === item.href
@@ -103,26 +101,7 @@ export function DashboardSidebar() {
           )
         })}
 
-        {currentUser?.role !== 'admin' &&
-          currentUser?.role !== 'lead' &&
-          currentUser?.role !== 'finance' &&
-          currentUser?.role !== 'accounts' &&
-          currentUser?.role !== 'evangelist' && (
-          <Link
-            href="/dashboard/submit-task"
-            className={cn(
-              'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all',
-              pathname === '/dashboard/submit-task'
-                ? 'bg-primary/15 text-primary border border-primary/20'
-                : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-            )}
-          >
-            <Send className={cn('size-4 shrink-0', pathname === '/dashboard/submit-task' ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
-            <span className="flex-1">Submit Task</span>
-          </Link>
-        )}
-
-        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && currentUser?.role !== 'finance' && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'lead') && (
           <>
             <div className="mt-4 mb-2 px-3">
               <div className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-semibold">Admin</div>
@@ -158,8 +137,6 @@ export function DashboardSidebar() {
             <div className="text-xs text-muted-foreground flex items-center gap-1">
               {currentUser.role === 'admin' ? (
                 <><Shield className="size-3 text-primary" /> Admin</>
-              ) : currentUser.role === 'finance' ? (
-                <><Receipt className="size-3 text-primary" /> Finance</>
               ) : currentUser.role === 'accounts' ? (
                 <><Receipt className="size-3 text-primary" /> Accounts</>
               ) : currentUser.role === 'evangelist' ? (
