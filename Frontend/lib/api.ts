@@ -28,11 +28,34 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   return res.json()
 }
 
+/** Plain text / CSV (not JSON). Use for file downloads. */
+export async function apiFetchText(path: string, options: RequestInit = {}): Promise<string> {
+  const token = getToken()
+  const headers: HeadersInit = {
+    ...(options.headers || {}),
+  }
+  if (token) {
+    ;(headers as Record<string, string>).Authorization = `Bearer ${token}`
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `Request failed with status ${res.status}`)
+  }
+
+  return res.text()
+}
+
 export type AuthUser = {
   id: string
   name: string
   email: string
-  role: 'admin' | 'lead' | 'associate' | 'intern' | 'finance' | 'accounts' | 'evangelist'
+  role: 'admin' | 'lead' | 'associate' | 'intern' | 'accounts' | 'evangelist'
   status?: 'pending' | 'active' | 'rejected' | 'suspended'
   avatar?: string
   points?: number
