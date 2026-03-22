@@ -21,6 +21,11 @@ export interface ITaskHistoryEntry {
   meta?: Record<string, unknown>;
 }
 
+export interface IPendingAssignmentRequest {
+  user: Types.ObjectId;
+  requestedAt: Date;
+}
+
 export interface ITask extends Document {
   title: string;
   description?: string;
@@ -29,11 +34,14 @@ export interface ITask extends Document {
   contributionType?: string;
   priority: TaskPriority;
   points: number;
-  assignedTo: Types.ObjectId;
+  /** Set when someone is working on the task; null = open pool (anyone can claim). */
+  assignedTo?: Types.ObjectId | null;
   createdBy: Types.ObjectId;
   deadline?: Date;
   submission?: ITaskSubmission;
   history: ITaskHistoryEntry[];
+  /** Contributors request pool tasks here; admin/lead approves to assign. */
+  pendingAssignmentRequests?: IPendingAssignmentRequest[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,7 +68,7 @@ const TaskSchema = new Schema<ITask>(
       default: "medium",
     },
     points: { type: Number, default: 0, min: 0 },
-    assignedTo: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    assignedTo: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     deadline: { type: Date },
     submission: {
@@ -80,6 +88,15 @@ const TaskSchema = new Schema<ITask>(
         meta: { type: Schema.Types.Mixed },
       },
     ],
+    pendingAssignmentRequests: {
+      type: [
+        {
+          user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+          requestedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );
