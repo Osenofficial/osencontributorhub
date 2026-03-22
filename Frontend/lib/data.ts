@@ -119,6 +119,9 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
 
 export const MONTHLY_POINT_CAP = 100
 
+/** Extra points added when task priority is Urgent (admin task form). */
+export const URGENT_TASK_BONUS_POINTS = 3
+
 /** Tiered payout by monthly points (min 10 pts to qualify). Cap 100 pts = ₹5000. */
 export const PAYOUT_TIERS: { min: number; max: number; amount: number }[] = [
   { min: 10, max: 20, amount: 500 },
