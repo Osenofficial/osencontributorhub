@@ -5,7 +5,6 @@ export type UserRole =
   | "lead"
   | "associate"
   | "intern"
-  | "finance"
   | "accounts"
   | "evangelist";
 
@@ -44,7 +43,7 @@ const UserSchema = new Schema<IUser>(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["admin", "lead", "associate", "intern", "finance", "accounts", "evangelist"],
+      enum: ["admin", "lead", "associate", "intern", "accounts", "evangelist"],
       default: "intern",
       index: true,
     },
