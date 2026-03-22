@@ -14,11 +14,17 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
 
-    const [totalTasks, completedTasks, notifications, recentTasks] = await Promise.all([
+    const [totalTasks, completedTasks, notifications, recentTasks, taskFeed] = await Promise.all([
       Task.countDocuments({ assignedTo: userId }),
       Task.countDocuments({ assignedTo: userId, status: "completed" }),
       Notification.find({ user: userId, read: false }).sort({ createdAt: -1 }).limit(10),
       Task.find({ assignedTo: userId }).sort({ updatedAt: -1 }).limit(5),
+      Task.find()
+        .populate("assignedTo", "name email")
+        .populate("createdBy", "name email")
+        .populate("pendingAssignmentRequests.user", "name email")
+        .sort({ createdAt: -1 })
+        .limit(500),
     ]);
 
     res.json({
@@ -27,6 +33,8 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
       completionRate: totalTasks ? completedTasks / totalTasks : 0,
       notifications,
       recentTasks,
+      taskFeed,
+      activities: [],
     });
   } catch (err) {
     next(err);
@@ -100,10 +108,123 @@ dashboardRouter.get("/team", async (req: AuthRequest, res, next) => {
 dashboardRouter.get("/tasks", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
-    const tasks = await Task.find({ assignedTo: userId })
+    const role = req.user!.role;
+    const filter =
+      role === "admin"
+        ? {}
+        : {
+            $or: [{ assignedTo: userId }, { assignedTo: null, status: "todo" }],
+          };
+    const tasks = await Task.find(filter)
       .populate("assignedTo", "name email")
+      .populate("createdBy", "name email")
+      .populate("pendingAssignmentRequests.user", "name email")
       .sort({ createdAt: -1 });
     res.json(tasks);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Claim an open pool task — only admin/lead (instant). Contributors use POST .../request-assignment. */
+dashboardRouter.post("/tasks/:id/claim", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const role = req.user!.role;
+    if (!["admin", "lead"].includes(role)) {
+      return res.status(403).json({
+        message:
+          "Contributors must request assignment. Use “Request assignment” — an admin or lead will approve.",
+      });
+    }
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    if (task.assignedTo != null) {
+      return res.status(400).json({ message: "Task is already assigned" });
+    }
+    if (task.status !== "todo") {
+      return res.status(400).json({ message: "Only open pool tasks can be claimed" });
+    }
+    task.pendingAssignmentRequests = [];
+    task.assignedTo = userId as any;
+    task.history.push({
+      actor: userId,
+      action: "claimed",
+      fromStatus: task.status,
+      toStatus: task.status,
+      createdAt: new Date(),
+    });
+    await task.save();
+    await Notification.create({
+      user: userId,
+      title: "You claimed a task",
+      message: task.title,
+    });
+    const updated = await Task.findById(task._id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email")
+      .populate("pendingAssignmentRequests.user", "name email");
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Contributor asks to be assigned to an open pool task — admin/lead approves in Admin panel. */
+dashboardRouter.post("/tasks/:id/request-assignment", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const role = req.user!.role;
+    if (["admin", "lead"].includes(role)) {
+      return res.status(400).json({
+        message: "Use Claim to assign yourself instantly, or manage tasks from the Admin panel.",
+      });
+    }
+
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    if (task.assignedTo != null) {
+      return res.status(400).json({ message: "This task is already assigned to someone" });
+    }
+    if (task.status !== "todo") {
+      return res.status(400).json({ message: "Only open tasks can be requested" });
+    }
+
+    const requests = task.pendingAssignmentRequests || [];
+    if (requests.some((p: { user: { toString: () => string } }) => p.user.toString() === userId.toString())) {
+      return res.status(400).json({ message: "You already have a pending request for this task" });
+    }
+
+    requests.push({ user: userId as any, requestedAt: new Date() });
+    task.pendingAssignmentRequests = requests;
+    task.history.push({
+      actor: userId,
+      action: "request_assignment",
+      fromStatus: task.status,
+      toStatus: task.status,
+      createdAt: new Date(),
+    });
+    await task.save();
+
+    const requesterName = req.user!.name || "A contributor";
+    const managers = await User.find({ role: { $in: ["admin", "lead"] } }).select("_id");
+    for (const m of managers) {
+      await Notification.create({
+        user: m._id,
+        title: "Assignment request",
+        message: `${requesterName} wants to work on "${task.title}"`,
+      });
+    }
+
+    const updated = await Task.findById(task._id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email")
+      .populate("pendingAssignmentRequests.user", "name email");
+    res.json(updated);
   } catch (err) {
     next(err);
   }
@@ -122,7 +243,9 @@ dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
       return res.status(404).json({ message: "Task not found" });
     }
 
-    if (newAssigneeId && newAssigneeId !== task.assignedTo._id?.toString()) {
+    const currentAssigneeStr =
+      (task.assignedTo as any)?._id?.toString?.() ?? (task.assignedTo as any)?.toString?.();
+    if (newAssigneeId && currentAssigneeStr && newAssigneeId !== currentAssigneeStr) {
       task.assignedTo = newAssigneeId as any;
       task.history.push({
         actor: userId,
@@ -161,19 +284,30 @@ dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
 
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
-      .populate("createdBy", "name email");
+      .populate("createdBy", "name email")
+      .populate("pendingAssignmentRequests.user", "name email");
     res.json(updated);
   } catch (err) {
     next(err);
   }
 });
 
-// Task comments: assignee, createdBy, or admin/lead can view and add
-async function canAccessTaskComments(userId: any, userRole: string, task: any): Promise<boolean> {
+// Task comments: pool (unassigned) tasks visible to everyone; posting requires assignee or admin/lead
+function canViewTaskComments(userId: any, userRole: string, task: any): boolean {
   if (["admin", "lead"].includes(userRole)) return true;
   const assigneeId = task.assignedTo?._id?.toString() ?? task.assignedTo?.toString();
   const createdById = task.createdBy?._id?.toString() ?? task.createdBy?.toString();
   const uid = userId.toString();
+  if (!assigneeId && task.status === "todo") return true;
+  return uid === assigneeId || uid === createdById;
+}
+
+function canPostTaskComment(userId: any, userRole: string, task: any): boolean {
+  if (["admin", "lead"].includes(userRole)) return true;
+  const assigneeId = task.assignedTo?._id?.toString() ?? task.assignedTo?.toString();
+  const createdById = task.createdBy?._id?.toString() ?? task.createdBy?.toString();
+  const uid = userId.toString();
+  if (!assigneeId && task.status === "todo") return false;
   return uid === assigneeId || uid === createdById;
 }
 
@@ -185,7 +319,7 @@ dashboardRouter.get("/tasks/:id/comments", async (req: AuthRequest, res, next) =
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
-    const canAccess = await canAccessTaskComments(req.user!._id, req.user!.role, task);
+    const canAccess = canViewTaskComments(req.user!._id, req.user!.role, task);
     if (!canAccess) {
       return res.status(403).json({ message: "You do not have access to this task" });
     }
@@ -210,9 +344,12 @@ dashboardRouter.post("/tasks/:id/comments", async (req: AuthRequest, res, next) 
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
-    const canAccess = await canAccessTaskComments(req.user!._id, req.user!.role, task);
+    const canAccess = canViewTaskComments(req.user!._id, req.user!.role, task);
     if (!canAccess) {
       return res.status(403).json({ message: "You do not have access to this task" });
+    }
+    if (!canPostTaskComment(req.user!._id, req.user!.role, task)) {
+      return res.status(403).json({ message: "Claim this task before commenting" });
     }
     const comment = await Comment.create({
       task: task._id,
@@ -420,8 +557,92 @@ dashboardRouter.get("/report", async (req: AuthRequest, res, next) => {
   }
 });
 
+// CSV export for the same scope as GET /report (tasks assigned to user in optional date range)
+dashboardRouter.get("/report/export-csv", async (req: AuthRequest, res, next) => {
+  try {
+    const esc = (v: unknown) => {
+      const s = String(v ?? "");
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const { q, from, to } = req.query as { q?: string; from?: string; to?: string };
+
+    let targetUser = req.user!;
+
+    if (q) {
+      if (req.user!.role !== "admin" && req.user!.role !== "lead") {
+        return res.status(403).json({ message: "Only admin or lead can view other users' reports" });
+      }
+      const query = q.trim();
+      const user = await User.findOne({
+        $or: [{ email: query.toLowerCase() }, { name: new RegExp(query, "i") }],
+      });
+      if (!user) {
+        return res.status(404).json({ message: "User not found for given query" });
+      }
+      targetUser = user;
+    }
+
+    const dateFilter: Record<string, unknown> = {};
+    if (from || to) {
+      dateFilter.createdAt = {};
+      if (from) {
+        (dateFilter.createdAt as any).$gte = new Date(from);
+      }
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        (dateFilter.createdAt as any).$lte = end;
+      }
+    }
+
+    const match: any = {
+      assignedTo: targetUser._id,
+      ...(Object.keys(dateFilter).length ? dateFilter : {}),
+    };
+
+    const tasks = await Task.find(match).sort({ createdAt: -1 });
+
+    const header = [
+      "Contributor name",
+      "Contributor email",
+      "Task title",
+      "Status",
+      "Category",
+      "Points",
+      "Created (ISO)",
+    ];
+    const lines: string[][] = [header];
+    for (const t of tasks) {
+      lines.push([
+        targetUser.name,
+        targetUser.email,
+        t.title,
+        t.status,
+        t.category,
+        String(t.points ?? ""),
+        t.createdAt ? new Date(t.createdAt).toISOString() : "",
+      ]);
+    }
+    const csv = lines.map((row) => row.map(esc).join(",")).join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="contribution-report-${new Date().toISOString().slice(0, 10)}.csv"`
+    );
+    res.send("\ufeff" + csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ----- Invoices (Travel Reimbursement) -----
 const INVOICE_MAX_AMOUNT = 1000;
+
+/** Roles that cannot submit reimbursements (reviewers / system only). */
+function canRaiseInvoice(role: string): boolean {
+  return !["admin", "accounts"].includes(role);
+}
 
 function canViewInvoiceStage(role: string, invoice: any): boolean {
   if (role === "admin") return true;
@@ -433,11 +654,8 @@ function canViewInvoiceStage(role: string, invoice: any): boolean {
 function canViewInvoiceComments(userRole: string, invoice: any, userId: string | null): boolean {
   if (userRole === "admin") return true;
   if (userRole === "accounts") return ["pending_accounts", "paid", "rejected"].includes(invoice.status);
-  if (userRole === "evangelist") {
-    const ownerId = invoice.submittedBy?._id?.toString?.() ?? invoice.submittedBy?.toString?.();
-    return !!userId && ownerId === userId;
-  }
-  return false;
+  const ownerId = invoice.submittedBy?._id?.toString?.() ?? invoice.submittedBy?.toString?.();
+  return !!(ownerId && userId && ownerId === userId);
 }
 
 function canPostInvoiceComment(userRole: string, invoice: any): boolean {
@@ -448,8 +666,8 @@ function canPostInvoiceComment(userRole: string, invoice: any): boolean {
 
 dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
   try {
-    if (req.user!.role !== "evangelist") {
-      return res.status(403).json({ message: "Only Evangelist accounts can raise invoices" });
+    if (!canRaiseInvoice(req.user!.role)) {
+      return res.status(403).json({ message: "Your role cannot submit travel reimbursements" });
     }
     const userId = req.user!._id;
     const body = req.body;
@@ -538,6 +756,150 @@ dashboardRouter.get("/invoices", async (req: AuthRequest, res, next) => {
   }
 });
 
+function escapeCsvCell(v: unknown): string {
+  const s = String(v ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+dashboardRouter.get("/invoices/tracking", async (req: AuthRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    const userId = req.user!._id;
+    const qs = req.query as {
+      status?: string;
+      name?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    };
+
+    const statusFilter = String(qs.status || "all");
+    const nameQ = String(qs.name || "").trim();
+    const dateFromStr = String(qs.dateFrom || "").trim();
+    const dateToStr = String(qs.dateTo || "").trim();
+
+    const andParts: Record<string, unknown>[] = [];
+
+    // Full list: admin & accounts only. Everyone else sees their own submissions.
+    if (role !== "admin" && role !== "accounts") {
+      andParts.push({ submittedBy: userId });
+    }
+
+    if (statusFilter !== "all" && ["pending_admin", "pending_accounts", "paid", "rejected"].includes(statusFilter)) {
+      andParts.push({ status: statusFilter });
+    }
+
+    const parseDayStart = (s: string): Date | null => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      if (!m) return null;
+      return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0));
+    };
+    const parseDayEnd = (s: string): Date | null => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      if (!m) return null;
+      return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999));
+    };
+
+    if (dateFromStr || dateToStr) {
+      const range: { $gte?: Date; $lte?: Date } = {};
+      if (dateFromStr) {
+        const d = parseDayStart(dateFromStr);
+        if (d) range.$gte = d;
+      }
+      if (dateToStr) {
+        const d = parseDayEnd(dateToStr);
+        if (d) range.$lte = d;
+      }
+      if (Object.keys(range).length > 0) {
+        andParts.push({ eventDate: range });
+      }
+    }
+
+    if (nameQ) {
+      const esc = nameQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rx = new RegExp(esc, "i");
+      const matchingUserIds = await User.find({
+        $or: [{ name: rx }, { email: rx }],
+      }).distinct("_id");
+      andParts.push({
+        $or: [
+          { fullName: rx },
+          { email: rx },
+          { eventName: rx },
+          { submittedBy: { $in: matchingUserIds } },
+        ],
+      });
+    }
+
+    const filter: Record<string, unknown> =
+      andParts.length === 0 ? {} : andParts.length === 1 ? andParts[0]! : { $and: andParts };
+
+    const invoices = await Invoice.find(filter)
+      .populate("submittedBy", "name email role")
+      .populate("adminReviewedBy", "name email role")
+      .populate("accountsReviewedBy", "name email role")
+      .sort({ createdAt: -1 });
+    res.json(invoices);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/invoices/export/paid-csv", async (req: AuthRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    if (!["admin", "lead", "accounts"].includes(role)) {
+      return res.status(403).json({ message: "Only admin, lead, or accounts can export paid invoices" });
+    }
+    const invoices = await Invoice.find({ status: "paid" })
+      .populate("submittedBy", "name email")
+      .sort({ paidAt: -1, createdAt: -1 });
+
+    const header = [
+      "Paid date",
+      "Amount (INR)",
+      "Payment method",
+      "UPI or bank details",
+      "Submitter name",
+      "Submitter email",
+      "Event name",
+    ];
+    const lines: string[][] = [header];
+
+    for (const inv of invoices) {
+      const sub = inv.submittedBy as { name?: string; email?: string } | undefined;
+      const paidDate = inv.paidAt ? new Date(inv.paidAt).toISOString().slice(0, 10) : "";
+      const amount = String(inv.totalAmountClaimed ?? "");
+      const method = inv.paymentMethod === "upi" ? "UPI" : "Bank transfer";
+      let details = "";
+      if (inv.paymentMethod === "upi") {
+        details = inv.upiId || "";
+      } else {
+        details = [inv.bankAccountHolderName, inv.bankAccountNumber, inv.bankIfscCode].filter(Boolean).join(" | ");
+      }
+      lines.push([
+        paidDate,
+        amount,
+        method,
+        details,
+        sub?.name || inv.fullName || "",
+        sub?.email || inv.email || "",
+        inv.eventName || "",
+      ]);
+    }
+
+    const csv = lines.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="paid-invoices-${new Date().toISOString().slice(0, 10)}.csv"`
+    );
+    res.send("\ufeff" + csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
 dashboardRouter.get("/invoices/:id", async (req: AuthRequest, res, next) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
@@ -549,16 +911,16 @@ dashboardRouter.get("/invoices/:id", async (req: AuthRequest, res, next) => {
     }
     const userId = req.user!._id.toString();
     const isOwner = invoice.submittedBy._id.toString() === userId;
-    if (req.user!.role === "evangelist" && !isOwner) {
-      return res.status(403).json({ message: "You do not have access to this invoice" });
+    if (isOwner) {
+      return res.json(invoice);
     }
-    if (req.user!.role === "accounts" && !canViewInvoiceStage(req.user!.role, invoice)) {
-      return res.status(403).json({ message: "You do not have access to this invoice" });
+    if (req.user!.role === "admin") {
+      return res.json(invoice);
     }
-    if (req.user!.role !== "admin" && req.user!.role !== "accounts" && req.user!.role !== "evangelist") {
-      return res.status(403).json({ message: "You do not have access to this invoice" });
+    if (req.user!.role === "accounts" && canViewInvoiceStage(req.user!.role, invoice)) {
+      return res.json(invoice);
     }
-    res.json(invoice);
+    return res.status(403).json({ message: "You do not have access to this invoice" });
   } catch (err) {
     next(err);
   }
