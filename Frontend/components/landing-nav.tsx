@@ -4,10 +4,12 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { Menu, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { useApp } from '@/lib/app-context'
 
 export function LandingNav() {
   const [open, setOpen] = useState(false)
+  const { currentUser, loading } = useApp()
+  const isLoggedIn = Boolean(currentUser)
 
   return (
     <header className="fixed inset-x-0 top-0 z-50">
@@ -26,26 +28,35 @@ export function LandingNav() {
             <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               How it Works
             </a>
-            <a href="#contributions" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-              Contributions
-            </a>
-            <a href="#leaderboard" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/dashboard/leaderboard" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Leaderboard
-            </a>
+            </Link>
           </div>
 
           {/* Actions */}
           <div className="hidden items-center gap-3 md:flex">
-            <Link href="/login">
-              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-                Login
-              </Button>
-            </Link>
-            <Link href="/register">
-              <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple">
-                Join OSEN
-              </Button>
-            </Link>
+            {loading ? (
+              <div className="h-8 w-24 animate-pulse rounded-md bg-muted/50" aria-hidden />
+            ) : isLoggedIn ? (
+              <Link href="/dashboard">
+                <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple">
+                  Dashboard
+                </Button>
+              </Link>
+            ) : (
+              <>
+                <Link href="/login">
+                  <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                    Login
+                  </Button>
+                </Link>
+                <Link href="/register">
+                  <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple">
+                    Join OSEN
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile menu toggle */}
@@ -63,15 +74,24 @@ export function LandingNav() {
           <div className="glass mt-2 rounded-2xl border px-5 py-4 md:hidden">
             <div className="flex flex-col gap-3">
               <a href="#how-it-works" className="text-sm text-muted-foreground" onClick={() => setOpen(false)}>How it Works</a>
-              <a href="#contributions" className="text-sm text-muted-foreground" onClick={() => setOpen(false)}>Contributions</a>
-              <a href="#leaderboard" className="text-sm text-muted-foreground" onClick={() => setOpen(false)}>Leaderboard</a>
-              <div className="mt-2 flex gap-3">
-                <Link href="/login" className="flex-1">
-                  <Button variant="outline" size="sm" className="w-full border-border">Login</Button>
-                </Link>
-                <Link href="/register" className="flex-1">
-                  <Button size="sm" className="w-full bg-primary neon-glow-purple">Join OSEN</Button>
-                </Link>
+              <Link href="/dashboard/leaderboard" className="text-sm text-muted-foreground" onClick={() => setOpen(false)}>Leaderboard</Link>
+              <div className="mt-2 flex flex-col gap-2">
+                {loading ? (
+                  <div className="h-9 w-full animate-pulse rounded-md bg-muted/50" aria-hidden />
+                ) : isLoggedIn ? (
+                  <Link href="/dashboard" className="w-full" onClick={() => setOpen(false)}>
+                    <Button size="sm" className="w-full bg-primary neon-glow-purple">Dashboard</Button>
+                  </Link>
+                ) : (
+                  <div className="flex gap-3">
+                    <Link href="/login" className="flex-1" onClick={() => setOpen(false)}>
+                      <Button variant="outline" size="sm" className="w-full border-border">Login</Button>
+                    </Link>
+                    <Link href="/register" className="flex-1" onClick={() => setOpen(false)}>
+                      <Button size="sm" className="w-full bg-primary neon-glow-purple">Join OSEN</Button>
+                    </Link>
+                  </div>
+                )}
               </div>
             </div>
           </div>
