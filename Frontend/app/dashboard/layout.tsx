@@ -21,7 +21,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     if (loading || !currentUser) return
     if (currentUser.role !== 'accounts' && currentUser.role !== 'evangelist') return
 
-    const allowed = ['/dashboard/invoices', '/dashboard/profile', '/dashboard/notifications']
+    const allowed = [
+      '/dashboard/invoices',
+      '/dashboard/invoice-tracking',
+      '/dashboard/profile',
+      '/dashboard/notifications',
+    ]
     if (!allowed.includes(pathname)) {
       router.replace('/dashboard/invoices')
     }
@@ -29,20 +34,20 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   if (loading || !currentUser) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-dvh items-center justify-center bg-background">
         <div className="text-sm text-muted-foreground">Loading dashboard...</div>
       </div>
     )
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-background">
       {/* Desktop sidebar */}
-      <div className="hidden md:flex">
+      <div className="hidden min-h-0 md:flex md:shrink-0">
         <DashboardSidebar />
       </div>
-      {/* Main content */}
-      <main className="flex-1 overflow-auto pb-16 md:pb-0">
+      {/* Main: min-h-0 + overscroll avoids scroll chaining / jump; pb reserves space for fixed mobile nav */}
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain pb-[calc(4rem+env(safe-area-inset-bottom,0px))] md:pb-0 [scrollbar-gutter:stable]">
         {children}
       </main>
       {/* Mobile bottom nav */}
