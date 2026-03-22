@@ -230,53 +230,102 @@ dashboardRouter.post("/tasks/:id/request-assignment", async (req: AuthRequest, r
   }
 });
 
+/**
+ * Assignee-only updates: safe status transitions + submission links/comments.
+ * Reassignment is not allowed here (use admin flows).
+ */
 dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
-    const { status, submission, assignedTo: newAssigneeId } = req.body;
+    const { status: bodyStatus, submission: submissionBody } = req.body as {
+      status?: string;
+      submission?: Record<string, unknown>;
+    };
 
-    const task = await Task.findOne({ _id: req.params.id, assignedTo: userId }).populate(
-      "assignedTo",
-      "name email"
-    );
+    const task = await Task.findOne({ _id: req.params.id, assignedTo: userId });
     if (!task) {
-      return res.status(404).json({ message: "Task not found" });
+      return res.status(404).json({ message: "Task not found or not assigned to you" });
     }
 
-    const currentAssigneeStr =
-      (task.assignedTo as any)?._id?.toString?.() ?? (task.assignedTo as any)?.toString?.();
-    if (newAssigneeId && currentAssigneeStr && newAssigneeId !== currentAssigneeStr) {
-      task.assignedTo = newAssigneeId as any;
+    if (task.status === "completed") {
+      return res.status(400).json({ message: "This task is completed and cannot be changed" });
+    }
+
+    if (bodyStatus !== undefined) {
+      const nextStatus = bodyStatus as (typeof task)["status"];
+      const cur = task.status;
+      const allowed =
+        (cur === "todo" && nextStatus === "in_progress") ||
+        (cur === "in_progress" && nextStatus === "submitted") ||
+        (cur === "submitted" && nextStatus === "submitted");
+      if (!allowed) {
+        return res.status(400).json({
+          message:
+            "Invalid status change. Start the task (to in progress), submit for review, or keep it submitted while you update your submission.",
+        });
+      }
+      if (nextStatus !== cur) {
+        const fromStatus = task.status;
+        task.status = nextStatus;
+        task.history.push({
+          actor: userId,
+          action: "status_update",
+          fromStatus,
+          toStatus: nextStatus,
+          createdAt: new Date(),
+          meta: submissionBody && typeof submissionBody === "object" ? { hasSubmission: true } : undefined,
+        });
+        if (nextStatus === "submitted") {
+          const base = task.submission || {};
+          task.submission = {
+            githubLink: base.githubLink,
+            notionLink: base.notionLink,
+            googleDoc: base.googleDoc,
+            comments: base.comments,
+            submittedAt: new Date(),
+          } as any;
+        }
+      }
+    }
+
+    if (submissionBody && typeof submissionBody === "object") {
+      if (!["in_progress", "submitted"].includes(task.status)) {
+        return res.status(400).json({
+          message: "You can add or edit submission details while the task is in progress or waiting for review.",
+        });
+      }
+      const prev = task.submission || ({} as any);
+      const merged = {
+        githubLink:
+          submissionBody.githubLink !== undefined
+            ? String(submissionBody.githubLink ?? "").trim()
+            : prev.githubLink ?? "",
+        notionLink:
+          submissionBody.notionLink !== undefined
+            ? String(submissionBody.notionLink ?? "").trim()
+            : prev.notionLink ?? "",
+        googleDoc:
+          submissionBody.googleDoc !== undefined
+            ? String(submissionBody.googleDoc ?? "").trim()
+            : prev.googleDoc ?? "",
+        comments:
+          submissionBody.comments !== undefined
+            ? String(submissionBody.comments ?? "").trim()
+            : prev.comments ?? "",
+        submittedAt:
+          task.status === "submitted"
+            ? new Date()
+            : prev.submittedAt != null
+              ? prev.submittedAt
+              : undefined,
+      };
+      task.submission = merged as any;
       task.history.push({
         actor: userId,
-        action: "reassigned",
+        action: "submission_updated",
         fromStatus: task.status,
         toStatus: task.status,
         createdAt: new Date(),
-        meta: { assignedTo: newAssigneeId },
-      });
-      await Notification.create({
-        user: newAssigneeId,
-        title: "Task Assigned to You",
-        message: task.title,
-      });
-    }
-
-    const fromStatus = task.status;
-    if (status) {
-      task.status = status;
-    }
-    if (submission) {
-      task.submission = submission;
-    }
-    if (status) {
-      task.history.push({
-        actor: userId,
-        action: "status_update",
-        fromStatus,
-        toStatus: status,
-        createdAt: new Date(),
-        meta: submission ? { hasSubmission: true } : undefined,
       });
     }
 
