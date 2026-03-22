@@ -76,5 +76,14 @@ const TaskSchema = new mongoose_1.Schema({
             meta: { type: mongoose_1.Schema.Types.Mixed },
         },
     ],
+    pendingAssignmentRequests: {
+        type: [
+            {
+                user: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
+                requestedAt: { type: Date, default: Date.now },
+            },
+        ],
+        default: [],
+    },
 }, { timestamps: true });
 exports.Task = mongoose_1.default.models.Task || mongoose_1.default.model("Task", TaskSchema);
