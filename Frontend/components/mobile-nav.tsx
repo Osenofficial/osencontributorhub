@@ -2,7 +2,15 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, ClipboardList, Trophy, User, Bell, Shield, Send, Receipt } from 'lucide-react'
+import {
+  LayoutDashboard,
+  ClipboardList,
+  Trophy,
+  User,
+  Bell,
+  Shield,
+  Receipt,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
 import { useEffect, useState } from 'react'
@@ -10,7 +18,7 @@ import { apiFetch } from '@/lib/api'
 
 const NAV = [
   { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
-  { href: '/dashboard/tasks', label: 'Tasks', icon: ClipboardList },
+  { href: '/dashboard/tasks', label: 'My tasks', icon: ClipboardList },
   { href: '/dashboard/leaderboard', label: 'Board', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
@@ -23,7 +31,11 @@ const NAV_INVOICES = [
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
 ]
 
-const SUBMIT_TASK_NAV = { href: '/dashboard/submit-task', label: 'Submit', icon: Send }
+const NAV_ACCOUNTS = [
+  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/profile', label: 'Profile', icon: User },
+  { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
+]
 
 export function MobileNav() {
   const pathname = usePathname()
@@ -41,7 +53,8 @@ export function MobileNav() {
       <div className="flex items-center justify-around px-2 py-2">
         {(() => {
           const role = currentUser?.role
-          if (role === 'accounts' || role === 'evangelist') return NAV_INVOICES
+          if (role === 'accounts') return NAV_ACCOUNTS
+          if (role === 'evangelist') return NAV_INVOICES
           return NAV
         })().map((item) => {
           const active = pathname === item.href
@@ -62,24 +75,7 @@ export function MobileNav() {
             </Link>
           )
         })}
-        {currentUser?.role !== 'admin' &&
-          currentUser?.role !== 'lead' &&
-          currentUser?.role !== 'finance' &&
-          currentUser?.role !== 'accounts' &&
-          currentUser?.role !== 'evangelist' && (
-          <Link
-            href={SUBMIT_TASK_NAV.href}
-            className={cn(
-              'flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all',
-              pathname === SUBMIT_TASK_NAV.href ? 'text-primary' : 'text-muted-foreground',
-            )}
-          >
-            <SUBMIT_TASK_NAV.icon className="size-5" />
-            <span className="text-[10px] font-medium">{SUBMIT_TASK_NAV.label}</span>
-          </Link>
-        )}
         {(currentUser?.role === 'admin' || currentUser?.role === 'lead') &&
-          currentUser?.role !== 'finance' &&
           currentUser?.role !== 'accounts' &&
           currentUser?.role !== 'evangelist' && (
           <Link
