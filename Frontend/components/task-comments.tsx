@@ -57,7 +57,7 @@ export function TaskComments({
 
   return (
     <div className={cn('space-y-3', className)}>
-      <h4 className="text-sm font-semibold flex items-center gap-2">
+      <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
         <MessageSquare className="size-3.5" /> Comments ({comments.length})
       </h4>
       {loading ? (
@@ -71,7 +71,7 @@ export function TaskComments({
               comments.map((c) => (
                 <div
                   key={c._id}
-                  className="rounded-xl border border-border/50 bg-muted/20 p-3 text-xs"
+                  className="rounded-xl border border-border bg-muted p-3 text-xs"
                 >
                   <div className="flex items-start gap-3">
                     <AvatarCircle
@@ -82,7 +82,7 @@ export function TaskComments({
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="font-medium truncate">{c.author?.name ?? 'Unknown'}</span>
+                        <span className="font-medium truncate text-foreground">{c.author?.name ?? 'Unknown'}</span>
                         <span className="text-muted-foreground whitespace-nowrap">
                           {c.createdAt
                             ? new Date(c.createdAt).toLocaleString('en-IN', {
@@ -94,7 +94,7 @@ export function TaskComments({
                             : ''}
                         </span>
                       </div>
-                      <p className="text-muted-foreground whitespace-pre-wrap">{c.body}</p>
+                      <p className="text-foreground/90 whitespace-pre-wrap">{c.body}</p>
                     </div>
                   </div>
                 </div>
