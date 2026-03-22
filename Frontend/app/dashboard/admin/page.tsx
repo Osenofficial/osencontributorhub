@@ -167,6 +167,16 @@ function isTaskCreator(task: any, userId: string | undefined) {
   return cb != null && String(cb) === String(userId)
 }
 
+/** Admins may edit/delete/approve any task; leads only on tasks they created (else they submit an approval request). */
+function canActDirectOnTask(
+  task: any | undefined,
+  user: { id: string; role: string } | null | undefined,
+) {
+  if (!user || !task) return false
+  if (user.role === 'admin') return true
+  return isTaskCreator(task, user.id)
+}
+
 type AdminConfirm =
   | null
   | { kind: 'approve_submission'; taskId: string; title: string }
@@ -254,6 +264,7 @@ export default function AdminPage() {
   const [members, setMembers] = useState<any[]>([])
   const [stats, setStats] = useState<{ totalUsers: number; totalTasks: number; completedTasks: number } | null>(null)
   const [pendingAssignmentTasks, setPendingAssignmentTasks] = useState<any[]>([])
+  const [leadActionRequests, setLeadActionRequests] = useState<any[]>([])
   const [confirm, setConfirm] = useState<AdminConfirm>(null)
 
   function formatDate(value: string | Date | undefined) {
@@ -269,6 +280,13 @@ export default function AdminPage() {
       .catch(() => setPendingAssignmentTasks([]))
   }
 
+  function refreshLeadRequests() {
+    if (currentUser?.role !== 'admin') return
+    apiFetch<any[]>('/admin/lead-action-requests')
+      .then(setLeadActionRequests)
+      .catch(() => setLeadActionRequests([]))
+  }
+
   useEffect(() => {
     apiFetch<Task[]>('/admin/tasks')
       .then(setTasks)
@@ -280,14 +298,19 @@ export default function AdminPage() {
       .then(setStats)
       .catch(() => setStats(null))
     refreshPendingAssignments()
-  }, [])
+    if (currentUser.role === 'admin') {
+      apiFetch<any[]>('/admin/lead-action-requests')
+        .then(setLeadActionRequests)
+        .catch(() => setLeadActionRequests([]))
+    }
+  }, [currentUser.role])
 
   const canManageUsers = currentUser.role === 'admin'
 
   if (currentUser.role !== 'admin' && currentUser.role !== 'lead') {
     return (
       <div className="flex flex-col min-h-full">
-        <DashboardTopbar title="Admin Panel" />
+        <DashboardTopbar title="Access denied" />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-3">
             <Shield className="size-12 text-muted-foreground mx-auto" />
@@ -324,6 +347,10 @@ export default function AdminPage() {
       .catch(() => {})
   }
 
+  function findTaskById(taskId: string) {
+    return tasks.find((t) => String((t as any)._id ?? t.id) === taskId)
+  }
+
   function handleUpdateTask() {
     if (!taskForm || taskForm.mode !== 'edit') return
     if (!form.title || !form.deadline || !form.contributionType) return
@@ -340,58 +367,95 @@ export default function AdminPage() {
       contributionType: form.contributionType || undefined,
       priority: form.priority,
     }
-    apiFetch<Task>(`/admin/tasks/${taskId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    })
-      .then((task) => {
-        setTasks((prev) =>
-          prev.map((t) => (((t as any)._id ?? t.id) === taskId ? { ...t, ...task } : t)),
-        )
-        setViewTask((vt) => {
-          if (!vt) return vt
-          const vid = (vt as any)._id ?? vt.id
-          return vid === taskId ? ({ ...vt, ...task } as Task) : vt
-        })
-        setForm(DEFAULT_FORM)
-        setTaskForm(null)
+    const existing = findTaskById(taskId)
+    if (canActDirectOnTask(existing, currentUser)) {
+      apiFetch<Task>(`/admin/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
       })
-      .catch(() => {})
+        .then((task) => {
+          setTasks((prev) =>
+            prev.map((t) => (((t as any)._id ?? t.id) === taskId ? { ...t, ...task } : t)),
+          )
+          setViewTask((vt) => {
+            if (!vt) return vt
+            const vid = (vt as any)._id ?? vt.id
+            return vid === taskId ? ({ ...vt, ...task } as Task) : vt
+          })
+          setForm(DEFAULT_FORM)
+          setTaskForm(null)
+        })
+        .catch(() => {})
+    } else {
+      apiFetch('/admin/lead-action-requests', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'edit_task', taskId, payload }),
+      })
+        .then(() => {
+          setForm(DEFAULT_FORM)
+          setTaskForm(null)
+        })
+        .catch(() => {})
+    }
   }
 
   function handleApprove(taskId: string) {
-    apiFetch<Task>(`/admin/tasks/${taskId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'completed' }),
-    }).catch(() => {})
-    setTasks((prev) =>
-      prev.map((t) => {
-        const tid = (t as any)._id ?? t.id
-        return tid === taskId ? { ...t, status: 'completed' } : t
-      })
-    )
+    const t = findTaskById(taskId)
+    if (canActDirectOnTask(t, currentUser)) {
+      apiFetch<Task>(`/admin/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'completed' }),
+      }).catch(() => {})
+      setTasks((prev) =>
+        prev.map((task) => {
+          const tid = (task as any)._id ?? task.id
+          return tid === taskId ? { ...task, status: 'completed' } : task
+        }),
+      )
+    } else {
+      apiFetch('/admin/lead-action-requests', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'approve_submission', taskId }),
+      }).catch(() => {})
+    }
     setViewTask(null)
   }
 
   function handleRejectSubmission(taskId: string) {
-    apiFetch<Task>(`/admin/tasks/${taskId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'in_progress' }),
-    }).catch(() => {})
-    setTasks((prev) =>
-      prev.map((t) => {
-        const tid = (t as any)._id ?? t.id
-        return tid === taskId ? { ...t, status: 'in_progress' } : t
-      })
-    )
+    const t = findTaskById(taskId)
+    if (canActDirectOnTask(t, currentUser)) {
+      apiFetch<Task>(`/admin/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'in_progress' }),
+      }).catch(() => {})
+      setTasks((prev) =>
+        prev.map((task) => {
+          const tid = (task as any)._id ?? task.id
+          return tid === taskId ? { ...task, status: 'in_progress' } : task
+        }),
+      )
+    } else {
+      apiFetch('/admin/lead-action-requests', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'reject_submission', taskId }),
+      }).catch(() => {})
+    }
     setViewTask(null)
   }
 
   function handleDelete(taskId: string) {
-    apiFetch(`/admin/tasks/${taskId}`, {
-      method: 'DELETE',
-    }).catch(() => {})
-    setTasks((prev) => prev.filter((t) => ((t as any)._id ?? t.id) !== taskId))
+    const t = findTaskById(taskId)
+    if (canActDirectOnTask(t, currentUser)) {
+      apiFetch(`/admin/tasks/${taskId}`, {
+        method: 'DELETE',
+      }).catch(() => {})
+      setTasks((prev) => prev.filter((task) => ((task as any)._id ?? task.id) !== taskId))
+    } else {
+      apiFetch('/admin/lead-action-requests', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'delete_task', taskId }),
+      }).catch(() => {})
+    }
     setViewTask(null)
   }
 
@@ -456,9 +520,11 @@ export default function AdminPage() {
   const submitted = tasks.filter((t) => t.status === 'submitted')
   const allTasks = [...tasks].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
+  const panelTitle = currentUser.role === 'admin' ? 'Admin Panel' : 'Program'
+
   return (
     <div className="flex flex-col min-h-full">
-      <DashboardTopbar title="Admin Panel" />
+      <DashboardTopbar title={panelTitle} />
 
       <div className="flex-1 p-6 space-y-6">
         {/* Overview cards */}
@@ -607,6 +673,79 @@ export default function AdminPage() {
           </div>
         )}
 
+        {view === 'tasks' && canManageUsers && leadActionRequests.length > 0 && (
+          <div className="glass rounded-2xl border border-orange-400/30 bg-orange-400/[0.06] p-5">
+            <h3 className="mb-2 flex items-center gap-2 font-semibold text-orange-400">
+              <Shield className="size-4" /> Lead requests — needs your approval ({leadActionRequests.length})
+            </h3>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Leads asked to edit, delete, approve, or reject work on tasks they didn&apos;t create. Approve to apply, or
+              decline.
+            </p>
+            <div className="space-y-3">
+              {leadActionRequests.map((req: any) => {
+                const title = req.task?.title ?? 'Task'
+                const leadName = req.requestedBy?.name ?? 'Lead'
+                return (
+                  <div
+                    key={req._id}
+                    className="flex flex-col gap-4 rounded-xl border border-border/60 bg-card/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-medium">
+                        <span className="text-orange-400/90">{String(req.type).replace(/_/g, ' ')}</span>
+                        {' · '}
+                        <span className="truncate">{title}</span>
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Requested by {leadName}
+                        {req.createdAt
+                          ? ` · ${new Date(req.createdAt).toLocaleString('en-IN', {
+                              day: 'numeric',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}`
+                          : ''}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-muted-foreground"
+                        onClick={() => {
+                          apiFetch(`/admin/lead-action-requests/${req._id}/decline`, { method: 'POST' })
+                            .then(() => {
+                              setLeadActionRequests((prev) => prev.filter((r) => r._id !== req._id))
+                            })
+                            .catch(() => {})
+                        }}
+                      >
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="gap-1 bg-primary/90 text-primary-foreground"
+                        onClick={() => {
+                          apiFetch(`/admin/lead-action-requests/${req._id}/approve`, { method: 'POST' })
+                            .then(() => {
+                              setLeadActionRequests((prev) => prev.filter((r) => r._id !== req._id))
+                              apiFetch<Task[]>('/admin/tasks').then(setTasks)
+                            })
+                            .catch(() => {})
+                        }}
+                      >
+                        <Check className="size-3.5" /> Approve
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {view === 'tasks' && submitted.length > 0 && (
           <div className="glass rounded-2xl border border-yellow-400/20 p-5">
             <h3 className="font-semibold mb-4 flex items-center gap-2 text-yellow-400">
@@ -711,12 +850,16 @@ export default function AdminPage() {
                       <Button size="icon" variant="ghost" className="size-7" onClick={() => setViewTask(task)}>
                         <Eye className="size-3.5" />
                       </Button>
-                      {isTaskCreator(task, currentUser?.id) && (
+                      {(currentUser.role === 'admin' || currentUser.role === 'lead') && (
                         <Button
                           size="icon"
                           variant="ghost"
                           className="size-7 text-primary hover:bg-primary/10"
-                          title="Edit task (you created this)"
+                          title={
+                            canActDirectOnTask(task, currentUser)
+                              ? 'Edit task'
+                              : 'Request edit (sent to admin for approval)'
+                          }
                           onClick={() => {
                             setForm(taskToFormState(task))
                             setTaskForm({ mode: 'edit', taskId: String(task._id ?? task.id) })
@@ -1105,7 +1248,10 @@ export default function AdminPage() {
                   ? 'Fill in all required fields (*) to save'
                   : 'Fill in all required fields (*) to create'
                 : taskForm?.mode === 'edit'
-                  ? 'Ready to save changes'
+                  ? taskForm.taskId &&
+                      !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser)
+                    ? 'Ready to submit to admin for approval'
+                    : 'Ready to save changes'
                   : 'Ready to create'}
             </p>
             <div className="flex gap-2">
@@ -1118,7 +1264,11 @@ export default function AdminPage() {
                   className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
                   disabled={!form.title || !form.deadline || !form.contributionType}
                 >
-                  <Pencil className="size-4" /> Save changes
+                  <Pencil className="size-4" />{' '}
+                  {taskForm.taskId &&
+                  !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser)
+                    ? 'Submit for approval'
+                    : 'Save changes'}
                 </Button>
               ) : (
                 <Button
@@ -1305,7 +1455,7 @@ export default function AdminPage() {
                     </Button>
                   </>
                 )}
-                {isTaskCreator(viewTask as any, currentUser?.id) && (
+                {(currentUser.role === 'admin' || currentUser.role === 'lead') && (
                   <Button
                     variant="outline"
                     className="gap-1.5 border-primary/40"
@@ -1315,8 +1465,16 @@ export default function AdminPage() {
                       setForm(taskToFormState(t))
                       setTaskForm({ mode: 'edit', taskId: String((t as any)._id ?? t.id) })
                     }}
+                    title={
+                      viewTask && canActDirectOnTask(viewTask as any, currentUser)
+                        ? 'Edit task'
+                        : 'Request edit (admin approves)'
+                    }
                   >
-                    <Pencil className="size-3.5" /> Edit
+                    <Pencil className="size-3.5" />{' '}
+                    {viewTask && canActDirectOnTask(viewTask as any, currentUser)
+                      ? 'Edit'
+                      : 'Request edit'}
                   </Button>
                 )}
                 <Button variant="ghost" onClick={() => setViewTask(null)}>Close</Button>
