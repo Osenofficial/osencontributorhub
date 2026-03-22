@@ -124,7 +124,7 @@ export default function DashboardPage() {
                       ? 'Manage contributors, review work, and keep the program moving from here.'
                       : inProgressTasks.length > 0
                         ? `You’re making progress — ${inProgressTasks.length} active task${inProgressTasks.length !== 1 ? 's' : ''} right now. Finish strong!`
-                        : 'Open My tasks for your board, or browse the full program list under All tasks.'}
+                        : 'Browse All tasks to see the program list, claim work, and track what’s assigned to you.'}
                   </p>
                 </div>
               </div>
@@ -141,20 +141,12 @@ export default function DashboardPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-full lg:flex-col">
-                  <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
-                    <Button variant="outline" className="w-full gap-2 border-primary/25" size="lg">
-                      All tasks
-                      <ArrowRight className="size-4" />
-                    </Button>
-                  </Link>
-                  <Link href="/dashboard/tasks" className="w-full sm:w-auto lg:w-full">
-                    <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
-                      My tasks
-                      <ArrowRight className="size-4" />
-                    </Button>
-                  </Link>
-                </div>
+                <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
+                  <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
+                    All tasks
+                    <ArrowRight className="size-4" />
+                  </Button>
+                </Link>
               </div>
             </div>
           </section>
