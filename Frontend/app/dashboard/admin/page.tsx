@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   CheckCircle2,
@@ -58,9 +58,21 @@ import {
   MIN_POINTS_FOR_PAYOUT,
   MAX_PAYOUT_INR,
   MONTHLY_POINT_CAP,
+  URGENT_TASK_BONUS_POINTS,
 } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
+import { CONTRIBUTION_TYPES, findContributionItemById } from '@/lib/contribution-types'
 import { cn } from '@/lib/utils'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+/** End of today (local) for new tasks — only used when creating a task. */
+function defaultDeadlineTodayEnd(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}T23:59`
+}
 
 type FormState = {
   title: string
@@ -72,85 +84,6 @@ type FormState = {
   assignedTo: string
   priority: Priority
 }
-
-const CONTRIBUTION_TYPES = [
-  {
-    group: 'Video Editing',
-    items: [
-      { id: 'video_reel', label: 'Reel editing', points: 5, category: 'development' as TaskCategory },
-      { id: 'video_short', label: '1–5 min video', points: 10, category: 'development' as TaskCategory },
-      { id: 'video_long', label: '5–10 min video', points: 15, category: 'development' as TaskCategory },
-    ],
-  },
-  {
-    group: 'Design',
-    items: [
-      { id: 'design_poster', label: 'Event poster', points: 6, category: 'design' as TaskCategory },
-    ],
-  },
-  {
-    group: 'Community',
-    items: [
-      {
-        id: 'interview_taken_over5',
-        label: 'Interviews taken (more than 5)',
-        points: 10,
-        category: 'community' as TaskCategory,
-      },
-      {
-        id: 'interview_taken_over10',
-        label: 'Interviews taken (more than 10)',
-        points: 21,
-        category: 'community' as TaskCategory,
-      },
-      {
-        id: 'basic_community_work',
-        label: 'Basic community work',
-        points: 3,
-        category: 'community' as TaskCategory,
-      },
-      {
-        id: 'social_media_community',
-        label: 'Social media',
-        points: 3,
-        category: 'community' as TaskCategory,
-      },
-    ],
-  },
-  {
-    group: 'Community Program & Hackathon',
-    items: [
-      { id: 'program_manager', label: 'Programme manager', points: 15, category: 'community' as TaskCategory },
-      { id: 'social_creatives', label: 'Social media creatives', points: 6, category: 'content' as TaskCategory },
-      { id: 'promo_video', label: 'Promotional video editing', points: 10, category: 'development' as TaskCategory },
-      { id: 'technical_speaker', label: 'Technical speaker', points: 7, category: 'community' as TaskCategory },
-      { id: 'volunteer_coordination', label: 'Volunteer coordination', points: 7, category: 'community' as TaskCategory },
-      { id: 'judge_mentor', label: 'Judge / Mentor', points: 10, category: 'community' as TaskCategory },
-    ],
-  },
-  {
-    group: 'Speaker Sessions',
-    items: [
-      { id: 'speaker_online_technical', label: 'Online technical session', points: 15, category: 'community' as TaskCategory },
-      { id: 'speaker_intro_online', label: 'Online intro to OSEN', points: 7, category: 'community' as TaskCategory },
-      { id: 'speaker_intro_offline', label: 'Offline intro to OSEN', points: 10, category: 'community' as TaskCategory },
-      { id: 'speaker_offline_technical', label: 'Offline technical session', points: 20, category: 'community' as TaskCategory },
-      { id: 'speaker_hackathon_mentor', label: 'Mentoring during hackathons', points: 15, category: 'community' as TaskCategory },
-    ],
-  },
-  {
-    group: 'Volunteer-Based',
-    items: [
-      { id: 'volunteer_engagement', label: 'Community engagement', points: 2, category: 'community' as TaskCategory },
-      { id: 'volunteer_moderation', label: 'Group moderation / management', points: 3, category: 'community' as TaskCategory },
-      { id: 'volunteer_formatting', label: 'Formatting groups / docs', points: 3, category: 'content' as TaskCategory },
-      { id: 'volunteer_sponsor_support', label: 'Sponsor support', points: 6, category: 'community' as TaskCategory },
-      { id: 'volunteer_updates', label: 'Event updates', points: 2, category: 'community' as TaskCategory },
-      { id: 'volunteer_registrations', label: 'Registrations', points: 4, category: 'community' as TaskCategory },
-      { id: 'volunteer_feedback', label: 'Feedback collection', points: 3, category: 'community' as TaskCategory },
-    ],
-  },
-]
 
 const DEFAULT_FORM: FormState = {
   title: '',
@@ -190,13 +123,18 @@ function taskToFormState(task: any): FormState {
   }
 }
 
+function pointsWithUrgentBonus(basePoints: number, priority: Priority): number {
+  const b = Math.min(100, Math.max(1, Math.round(basePoints)))
+  return priority === 'urgent' ? Math.min(100, b + URGENT_TASK_BONUS_POINTS) : b
+}
+
 function isTaskCreator(task: any, userId: string | undefined) {
   if (!userId) return false
   const cb = task.createdBy?._id ?? task.createdBy
   return cb != null && String(cb) === String(userId)
 }
 
-/** Admins may edit/delete/approve any task; leads only on tasks they created (else they submit an approval request). */
+/** Admins may edit/approve any task; leads may edit tasks they created (else they submit an approval request). Deletes: admins only directly; leads always request approval. */
 function canActDirectOnTask(
   task: any | undefined,
   user: { id: string; role: string } | null | undefined,
@@ -228,7 +166,7 @@ type AdminConfirm =
   | { kind: 'approve_user'; userId: string; name: string }
   | { kind: 'reject_user'; userId: string; name: string }
 
-function adminConfirmMeta(c: NonNullable<AdminConfirm>) {
+function adminConfirmMeta(c: NonNullable<AdminConfirm>, userRole?: string) {
   switch (c.kind) {
     case 'approve_submission':
       return {
@@ -245,6 +183,14 @@ function adminConfirmMeta(c: NonNullable<AdminConfirm>) {
         destructive: true,
       }
     case 'delete_task':
+      if (userRole === 'lead') {
+        return {
+          title: 'Request to delete this task?',
+          description: `Submit a delete request for "${c.title}"? An admin must approve before the task is removed.`,
+          actionLabel: 'Submit delete request',
+          destructive: true,
+        }
+      }
       return {
         title: 'Delete this task?',
         description: `Permanently delete "${c.title}"? This cannot be undone.`,
@@ -473,13 +419,13 @@ export default function AdminPage() {
   }
 
   function handleDelete(taskId: string) {
-    const t = findTaskById(taskId)
-    if (canActDirectOnTask(t, currentUser)) {
+    if (!currentUser) return
+    if (currentUser.role === 'admin') {
       apiFetch(`/admin/tasks/${taskId}`, {
         method: 'DELETE',
       }).catch(() => {})
       setTasks((prev) => prev.filter((task) => ((task as any)._id ?? task.id) !== taskId))
-    } else {
+    } else if (currentUser.role === 'lead') {
       apiFetch('/admin/lead-action-requests', {
         method: 'POST',
         body: JSON.stringify({ type: 'delete_task', taskId }),
@@ -547,9 +493,150 @@ export default function AdminPage() {
   }
 
   const submitted = tasks.filter((t) => t.status === 'submitted')
-  const allTasks = [...tasks].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  const allTasks = useMemo(
+    () => [...tasks].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [tasks],
+  )
+  const completedTasksList = useMemo(
+    () =>
+      [...tasks]
+        .filter((t) => t.status === 'completed')
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [tasks],
+  )
 
   const panelTitle = currentUser.role === 'admin' ? 'Admin Panel' : 'Program'
+
+  function renderStandardTaskRow(task: any) {
+    const assignee = task.assignedTo
+    const tid = task._id ?? task.id
+    return (
+      <div key={tid} className="flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-muted/20">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{task.title}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Created {formatDate(task.createdAt)}
+            <span className="ml-2">
+              {assignee?.name ? (
+                <>
+                  · Assigned to <span className="font-medium">{assignee.name}</span>
+                </>
+              ) : (
+                <span className="text-amber-600 dark:text-amber-400"> · Open pool</span>
+              )}
+            </span>
+          </p>
+        </div>
+        <div className="hidden shrink-0 items-center gap-2 sm:flex">
+          {assignee ? (
+            <div className="flex items-center gap-1.5">
+              <AvatarCircle initials={assignee.name?.slice(0, 2) ?? '?'} size="sm" />
+              <span className="hidden text-xs text-muted-foreground md:block">{assignee.name}</span>
+            </div>
+          ) : (
+            <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">Pool</span>
+          )}
+        </div>
+        <StatusBadge value={task.category} type="category" />
+        <StatusBadge value={task.status} type="status" />
+        <span className="hidden shrink-0 font-mono text-xs text-primary sm:block">{task.points} pts</span>
+        <div className="flex shrink-0 gap-1">
+          <Button size="icon" variant="ghost" className="size-7" onClick={() => setViewTask(task)}>
+            <Eye className="size-3.5" />
+          </Button>
+          {(currentUser!.role === 'admin' || currentUser!.role === 'lead') && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7 text-primary hover:bg-primary/10"
+              title={
+                canActDirectOnTask(task, currentUser!)
+                  ? 'Edit task'
+                  : 'Request edit (sent to admin for approval)'
+              }
+              onClick={() => {
+                setForm(taskToFormState(task))
+                setTaskForm({ mode: 'edit', taskId: String(tid) })
+              }}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          )}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-7 text-destructive hover:bg-destructive/10"
+            title={currentUser!.role === 'lead' ? 'Request delete (admin must approve)' : 'Delete task'}
+            onClick={() =>
+              setConfirm({
+                kind: 'delete_task',
+                taskId: String(tid),
+                title: task.title ?? 'this task',
+              })
+            }
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  function renderAdminPendingRow(task: any) {
+    const assignee = task.assignedTo
+    const tid = task._id ?? task.id
+    return (
+      <div
+        key={tid}
+        className="flex flex-col gap-2 border-b border-yellow-400/15 px-4 py-3 last:border-0 sm:flex-row sm:items-center sm:gap-3"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{task.title}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            {assignee && (
+              <>
+                <AvatarCircle initials={assignee.name?.slice(0, 2) ?? '?'} size="sm" />
+                <span className="text-xs text-muted-foreground">{assignee.name}</span>
+              </>
+            )}
+            <span className="font-mono text-xs text-primary">{task.points} pts</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-1.5">
+          <Button size="sm" variant="ghost" onClick={() => setViewTask(task)} className="text-xs">
+            Review
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              setConfirm({
+                kind: 'reject_submission',
+                taskId: String(tid),
+                title: task.title ?? 'this task',
+              })
+            }
+            className="gap-1 border-destructive/40 text-xs text-destructive hover:bg-destructive/10"
+          >
+            <XCircle className="size-3" /> Reject
+          </Button>
+          <Button
+            size="sm"
+            onClick={() =>
+              setConfirm({
+                kind: 'approve_submission',
+                taskId: String(tid),
+                title: task.title ?? 'this task',
+              })
+            }
+            className="gap-1 border border-green-400/30 bg-green-400/20 text-xs text-green-400 hover:bg-green-400/30"
+          >
+            <CheckCircle2 className="size-3" /> Approve
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col min-h-full">
@@ -608,7 +695,7 @@ export default function AdminPage() {
           {view === 'tasks' && (
             <Button
               onClick={() => {
-                setForm(DEFAULT_FORM)
+                setForm({ ...DEFAULT_FORM, deadline: defaultDeadlineTodayEnd() })
                 setTaskForm({ mode: 'create' })
               }}
               className="bg-primary text-primary-foreground neon-glow-purple gap-2"
@@ -775,148 +862,86 @@ export default function AdminPage() {
           </div>
         )}
 
-        {view === 'tasks' && submitted.length > 0 && (
-          <div className="glass rounded-2xl border border-yellow-400/20 p-5">
-            <h3 className="font-semibold mb-4 flex items-center gap-2 text-yellow-400">
-              <Eye className="size-4" /> Pending Review ({submitted.length})
-            </h3>
-            <div className="space-y-3">
-              {submitted.map((task: any) => {
-                const assignee = task.assignedTo
-                return (
-                  <div key={task._id ?? task.id} className="flex items-center gap-3 rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{task.title}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        {assignee && (
-                          <>
-                            <AvatarCircle initials={assignee.name?.slice(0, 2) ?? '?'} size="sm" />
-                            <span className="text-xs text-muted-foreground">{assignee.name}</span>
-                          </>
-                        )}
-                        <span className="text-xs font-mono text-primary">{task.points} pts</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2 shrink-0">
-                      <Button size="sm" variant="ghost" onClick={() => setViewTask(task)} className="text-xs">
-                        Review
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setConfirm({
-                            kind: 'reject_submission',
-                            taskId: String(task._id ?? task.id),
-                            title: task.title ?? 'this task',
-                          })
-                        }
-                        className="border-destructive/40 text-destructive hover:bg-destructive/10 text-xs gap-1"
-                      >
-                        <XCircle className="size-3" /> Reject
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          setConfirm({
-                            kind: 'approve_submission',
-                            taskId: String(task._id ?? task.id),
-                            title: task.title ?? 'this task',
-                          })
-                        }
-                        className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 text-xs gap-1"
-                      >
-                        <CheckCircle2 className="size-3" /> Approve
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Tasks or Users table */}
         {view === 'tasks' ? (
-          <div className="glass rounded-2xl border overflow-hidden">
-            <div className="px-5 py-4 border-b border-border/50">
-              <h3 className="font-semibold">All Tasks</h3>
-            </div>
-            <div className="divide-y divide-border/50">
-              {allTasks.map((task: any) => {
-                const assignee = task.assignedTo
-                return (
-                  <div key={task._id ?? task.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/20 transition-colors">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{task.title}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Created {formatDate(task.createdAt)}
-                        <span className="ml-2">
-                          {assignee?.name ? (
-                            <>
-                              · Assigned to <span className="font-medium">{assignee.name}</span>
-                            </>
-                          ) : (
-                            <span className="text-amber-600 dark:text-amber-400"> · Open pool</span>
-                          )}
-                        </span>
-                      </p>
-                    </div>
-                    <div className="hidden sm:flex items-center gap-2 shrink-0">
-                      {assignee ? (
-                        <div className="flex items-center gap-1.5">
-                          <AvatarCircle initials={assignee.name?.slice(0, 2) ?? '?'} size="sm" />
-                          <span className="text-xs text-muted-foreground hidden md:block">{assignee.name}</span>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">Pool</span>
-                      )}
-                    </div>
-                    <StatusBadge value={task.category} type="category" />
-                    <StatusBadge value={task.status} type="status" />
-                    <span className="text-xs font-mono text-primary shrink-0 hidden sm:block">{task.points} pts</span>
-                    <div className="flex gap-1 shrink-0">
-                      <Button size="icon" variant="ghost" className="size-7" onClick={() => setViewTask(task)}>
-                        <Eye className="size-3.5" />
-                      </Button>
-                      {(currentUser.role === 'admin' || currentUser.role === 'lead') && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="size-7 text-primary hover:bg-primary/10"
-                          title={
-                            canActDirectOnTask(task, currentUser)
-                              ? 'Edit task'
-                              : 'Request edit (sent to admin for approval)'
-                          }
-                          onClick={() => {
-                            setForm(taskToFormState(task))
-                            setTaskForm({ mode: 'edit', taskId: String(task._id ?? task.id) })
-                          }}
-                        >
-                          <Pencil className="size-3.5" />
-                        </Button>
-                      )}
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-7 text-destructive hover:bg-destructive/10"
-                        onClick={() =>
-                          setConfirm({
-                            kind: 'delete_task',
-                            taskId: String(task._id ?? task.id),
-                            title: task.title ?? 'this task',
-                          })
-                        }
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <Tabs defaultValue="all" className="w-full gap-4">
+            <TabsList className="grid h-auto min-h-11 w-full grid-cols-3 gap-1 p-1 sm:max-w-2xl">
+              <TabsTrigger value="all" className="text-xs sm:text-sm">
+                All tasks
+              </TabsTrigger>
+              <TabsTrigger value="pending" className="gap-1.5 text-xs sm:text-sm">
+                Pending
+                {submitted.length > 0 && (
+                  <span className="rounded-full bg-yellow-500/25 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-yellow-700 dark:text-yellow-300">
+                    {submitted.length}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="completed" className="gap-1.5 text-xs sm:text-sm">
+                Completed
+                {completedTasksList.length > 0 && (
+                  <span className="rounded-full bg-green-500/20 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-green-700 dark:text-green-300">
+                    {completedTasksList.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="all" className="mt-0">
+              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border">
+                <div className="shrink-0 border-b border-border/50 px-5 py-3">
+                  <h3 className="font-semibold">All tasks</h3>
+                  <p className="text-[11px] text-muted-foreground">Every task in the program.</p>
+                </div>
+                <div className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto">
+                  {allTasks.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-muted-foreground">No tasks yet.</p>
+                  ) : (
+                    allTasks.map((task: any) => renderStandardTaskRow(task))
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="pending" className="mt-0">
+              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border border-yellow-500/25 bg-yellow-500/[0.03]">
+                <div className="shrink-0 border-b border-border/50 px-5 py-3">
+                  <h3 className="flex items-center gap-2 font-semibold text-yellow-600 dark:text-yellow-400">
+                    <Eye className="size-4" /> Pending review
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    {canManageUsers
+                      ? 'Submissions awaiting your approval or rejection.'
+                      : 'Tasks in submitted status (use actions to request changes via admin if needed).'}
+                  </p>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  {submitted.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-muted-foreground">No pending submissions.</p>
+                  ) : canManageUsers ? (
+                    submitted.map((task: any) => renderAdminPendingRow(task))
+                  ) : (
+                    <div className="divide-y divide-border/50">{submitted.map((task: any) => renderStandardTaskRow(task))}</div>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="completed" className="mt-0">
+              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border">
+                <div className="shrink-0 border-b border-border/50 px-5 py-3">
+                  <h3 className="font-semibold">Completed</h3>
+                  <p className="text-[11px] text-muted-foreground">Approved and finished work.</p>
+                </div>
+                <div className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto">
+                  {completedTasksList.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-muted-foreground">No completed tasks yet.</p>
+                  ) : (
+                    completedTasksList.map((task: any) => renderStandardTaskRow(task))
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
         ) : (
           <div className="glass rounded-2xl border overflow-hidden">
             <div className="px-5 py-4 border-b border-border/50 flex items-center justify-between">
@@ -1113,22 +1138,24 @@ export default function AdminPage() {
                 <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">2</span>
                 <h3 className="text-sm font-semibold text-foreground">Contribution type & points</h3>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-8">
-                <div className="space-y-2">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-6 pl-8">
+                <div className="min-w-0 flex-1 space-y-2">
                   <label className="text-sm font-medium text-foreground">Contribution type <span className="text-destructive">*</span></label>
                   <Select
                     value={form.contributionType}
                     onValueChange={(value) => {
-                      const match = CONTRIBUTION_TYPES.flatMap((g) => g.items).find((i) => i.id === value)
+                      const match = findContributionItemById(value)
                       setForm((f) => ({
                         ...f,
                         contributionType: value,
                         category: match ? match.category : f.category,
-                        points: match ? String(match.points) : f.points,
+                        points: match
+                          ? String(pointsWithUrgentBonus(match.points, f.priority))
+                          : f.points,
                       }))
                     }}
                   >
-                    <SelectTrigger className="h-10 bg-background border-border">
+                    <SelectTrigger className="h-auto min-h-10 w-full min-w-0 bg-background border-border py-2.5 whitespace-normal !w-full items-start [&_[data-slot=select-value]]:whitespace-normal [&_[data-slot=select-value]]:text-left [&_[data-slot=select-value]]:items-start">
                       <SelectValue placeholder="Choose a type..." />
                     </SelectTrigger>
                     <SelectContent className="bg-card border-border max-h-72">
@@ -1150,7 +1177,7 @@ export default function AdminPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
+                <div className="w-full shrink-0 space-y-2 lg:w-36">
                   <label className="text-sm font-medium text-foreground">Points</label>
                   <Input
                     type="number"
@@ -1158,10 +1185,15 @@ export default function AdminPage() {
                     max={100}
                     value={form.points}
                     onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
-                    className="h-10 bg-background border-border"
+                    className="h-10 w-full bg-background border-border"
                   />
                   <p className="text-xs text-muted-foreground">
                     Payout by monthly points tier (10+ pts) · Cap 100 pts = ₹{MAX_PAYOUT_INR}
+                    {form.priority === 'urgent' && (
+                      <span className="mt-1 block text-primary/90">
+                        Urgent bonus +{URGENT_TASK_BONUS_POINTS} pts included in total (max 100).
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -1189,21 +1221,47 @@ export default function AdminPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Priority</label>
-                  <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v as Priority }))}>
+                  <Select
+                    value={form.priority}
+                    onValueChange={(v) => {
+                      const newP = v as Priority
+                      setForm((f) => {
+                        const oldP = f.priority
+                        let pts = parseInt(f.points, 10) || 10
+                        if (newP === 'urgent' && oldP !== 'urgent') {
+                          pts = Math.min(100, pts + URGENT_TASK_BONUS_POINTS)
+                        } else if (newP !== 'urgent' && oldP === 'urgent') {
+                          pts = Math.max(1, pts - URGENT_TASK_BONUS_POINTS)
+                        }
+                        return { ...f, priority: newP, points: String(pts) }
+                      })
+                    }}
+                  >
                     <SelectTrigger className="h-10 bg-background border-border">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="bg-card border-border">
                       {(['low', 'medium', 'high', 'urgent'] as Priority[]).map((p) => (
                         <SelectItem key={p} value={p} className="capitalize">
-                          {p === 'urgent' ? 'Urgent' : p}
+                          {p === 'urgent' ? `Urgent (+${URGENT_TASK_BONUS_POINTS} pts)` : p}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    Urgent adds <span className="font-medium text-foreground">+{URGENT_TASK_BONUS_POINTS} bonus</span> to
+                    Points (capped at 100).
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Deadline & time <span className="text-destructive">*</span></label>
+                  {(taskForm?.mode === 'create' || !form.deadline) && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {taskForm?.mode === 'create'
+                        ? 'Defaults to today — change if needed.'
+                        : 'This task has no deadline yet (e.g. self-submitted). Pick a date, then set the time.'}
+                    </p>
+                  )}
                   <div className="flex gap-2">
                     <Popover>
                       <PopoverTrigger asChild>
@@ -1223,19 +1281,26 @@ export default function AdminPage() {
                             const timePart = form.deadline?.includes('T') ? form.deadline.slice(11, 16) : '23:59'
                             setForm((f) => ({ ...f, deadline: datePart ? `${datePart}T${timePart}` : '' }))
                           }}
-                          disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
+                          disabled={
+                            taskForm?.mode === 'create'
+                              ? (date) => date < new Date(new Date().setHours(0, 0, 0, 0))
+                              : undefined
+                          }
                           initialFocus
                         />
                       </PopoverContent>
                     </Popover>
                     <Input
                       type="time"
-                      value={form.deadline?.includes('T') ? form.deadline.slice(11, 16) : '23:59'}
+                      disabled={!form.deadline?.slice(0, 10)}
+                      title={!form.deadline?.slice(0, 10) ? 'Choose a date first' : undefined}
+                      value={form.deadline?.includes('T') ? form.deadline.slice(11, 16) : ''}
                       onChange={(e) => {
-                        const datePart = form.deadline?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+                        const datePart = form.deadline?.slice(0, 10)
+                        if (!datePart) return
                         setForm((f) => ({ ...f, deadline: `${datePart}T${e.target.value}` }))
                       }}
-                      className="h-10 w-28 bg-background border-border"
+                      className="h-10 w-28 bg-background border-border disabled:opacity-50"
                     />
                   </div>
                 </div>
@@ -1316,17 +1381,19 @@ export default function AdminPage() {
       {/* View Task Dialog */}
       <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
         {viewTask && (
-          <DialogContent className="glass border-border/60 max-w-lg max-h-[90vh] overflow-hidden p-0 flex flex-col">
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 flex flex-col border-2 border-border bg-card text-card-foreground shadow-2xl shadow-black/40">
             {/* Fixed header so the close X never scrolls out of view */}
-            <div className="px-6 pt-6 pb-3 border-b border-border/50">
+            <div className="px-6 pt-6 pb-3 border-b border-border bg-muted/80">
               <DialogHeader>
-                <DialogTitle className="text-base">{viewTask.title}</DialogTitle>
+                <DialogTitle className="text-lg font-semibold tracking-tight text-foreground pr-8">
+                  {viewTask.title}
+                </DialogTitle>
               </DialogHeader>
             </div>
 
             {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              <p className="text-sm text-muted-foreground leading-relaxed">{viewTask.description}</p>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 bg-card">
+              <p className="text-sm leading-relaxed text-foreground/95">{viewTask.description}</p>
               <div className="flex flex-wrap gap-2">
                 <StatusBadge value={viewTask.category} type="category" />
                 <StatusBadge value={viewTask.priority} type="priority" />
@@ -1339,11 +1406,13 @@ export default function AdminPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Deadline: </span>
-                  <span>{formatDate((viewTask as any).deadline)}</span>
+                  <span className="text-foreground">{formatDate((viewTask as any).deadline)}</span>
                 </div>
                 <div className="col-span-1">
                   <span className="text-muted-foreground">Assigned to: </span>
-                  <span>{(viewTask as any).assignedTo?.name ?? 'Open pool (unassigned)'}</span>
+                  <span className="text-foreground">
+                    {(viewTask as any).assignedTo?.name ?? 'Open pool (unassigned)'}
+                  </span>
                 </div>
                 <div className="col-span-2 text-xs">
                   <span className="text-muted-foreground">Created by: </span>
@@ -1352,14 +1421,14 @@ export default function AdminPage() {
                   </span>
                 </div>
               </div>
-              <div className="rounded-xl border border-border/50 bg-background/40 p-3 text-xs space-y-2">
-                <div className="font-semibold">Payout (tiered by monthly points)</div>
+              <div className="rounded-xl border border-border bg-secondary p-3 text-xs space-y-2 text-secondary-foreground">
+                <div className="font-semibold text-foreground">Payout (tiered by monthly points)</div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">This task</span>
-                  <span>{viewTask.points} pts</span>
+                  <span className="font-medium text-foreground">{viewTask.points} pts</span>
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  Payout is by <strong>total monthly points</strong>. Min {MIN_POINTS_FOR_PAYOUT} pts to qualify.
+                  Payout is by <strong className="text-foreground/90">total monthly points</strong>. Min {MIN_POINTS_FOR_PAYOUT} pts to qualify.
                 </p>
                 <div className="space-y-0.5 text-[10px]">
                   {PAYOUT_TIERS.map((t) => (
@@ -1374,8 +1443,8 @@ export default function AdminPage() {
                 </p>
               </div>
               {viewTask.submission && (
-                <div className="glass rounded-xl border border-border/50 p-4 space-y-2">
-                  <h4 className="text-sm font-semibold">Submission</h4>
+                <div className="rounded-xl border border-border bg-secondary p-4 space-y-2">
+                  <h4 className="text-sm font-semibold text-foreground">Submission</h4>
                   {viewTask.submission.githubLink && (
                     <p className="text-xs text-muted-foreground">
                       GitHub:{' '}
@@ -1424,8 +1493,8 @@ export default function AdminPage() {
                 </div>
               )}
               {(viewTask as any).history && (viewTask as any).history.length > 0 && (
-                <div className="glass rounded-xl border border-border/50 p-4 space-y-2">
-                  <h4 className="text-sm font-semibold">History</h4>
+                <div className="rounded-xl border border-border bg-secondary p-4 space-y-2">
+                  <h4 className="text-sm font-semibold text-foreground">History</h4>
                   <div className="space-y-1.5 max-h-40 overflow-y-auto">
                     {(viewTask as any).history
                       .slice()
@@ -1435,8 +1504,8 @@ export default function AdminPage() {
                       )
                       .map((entry: any, idx: number) => (
                         <div key={idx} className="text-[11px] text-muted-foreground">
-                          <span className="font-mono text-xs">{formatDate(entry.createdAt as string)}</span>{' '}
-                          · <span className="font-semibold">{entry.action}</span>{' '}
+                          <span className="font-mono text-xs text-foreground/80">{formatDate(entry.createdAt as string)}</span>{' '}
+                          · <span className="font-semibold text-foreground">{entry.action}</span>{' '}
                           {entry.fromStatus && entry.toStatus && (
                             <span>
                               ({entry.fromStatus} → {entry.toStatus})
@@ -1447,13 +1516,13 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
-              <div className="glass rounded-xl border border-border/50 p-4">
+              <div className="rounded-xl border border-border bg-secondary p-4">
                 <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} />
               </div>
             </div>
 
             {/* Fixed footer so Close/Approve never get hidden */}
-            <div className="border-t border-border/50 bg-muted/20 px-6 py-4">
+            <div className="border-t border-border bg-muted px-6 py-4">
               <DialogFooter className="gap-2 flex-wrap sm:justify-end">
                 {viewTask.status === 'submitted' && (
                   <>
@@ -1516,16 +1585,16 @@ export default function AdminPage() {
       <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent className="glass border-border/60">
           <AlertDialogHeader>
-            <AlertDialogTitle>{confirm ? adminConfirmMeta(confirm).title : ''}</AlertDialogTitle>
+            <AlertDialogTitle>{confirm ? adminConfirmMeta(confirm, currentUser.role).title : ''}</AlertDialogTitle>
             <AlertDialogDescription>
-              {confirm ? adminConfirmMeta(confirm).description : ''}
+              {confirm ? adminConfirmMeta(confirm, currentUser.role).description : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className={
-                confirm && adminConfirmMeta(confirm).destructive
+                confirm && adminConfirmMeta(confirm, currentUser.role).destructive
                   ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
                   : undefined
               }
@@ -1534,7 +1603,7 @@ export default function AdminPage() {
                 executeConfirm()
               }}
             >
-              {confirm ? adminConfirmMeta(confirm).actionLabel : 'Continue'}
+              {confirm ? adminConfirmMeta(confirm, currentUser.role).actionLabel : 'Continue'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
