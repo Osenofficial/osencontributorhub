@@ -1,7 +1,21 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, CheckCircle2, Shield, Trash2, Eye, Users, ListChecks, Ban, Check, CalendarIcon } from 'lucide-react'
+import {
+  Plus,
+  CheckCircle2,
+  Shield,
+  Trash2,
+  Eye,
+  Users,
+  ListChecks,
+  Ban,
+  Check,
+  CalendarIcon,
+  UserPlus,
+  XCircle,
+  Pencil,
+} from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { StatusBadge } from '@/components/status-badge'
 import { AvatarCircle } from '@/components/avatar-circle'
@@ -22,6 +36,16 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useApp } from '@/lib/app-context'
@@ -106,8 +130,117 @@ const DEFAULT_FORM: FormState = {
   category: 'development',
   points: '10',
   deadline: '',
-  assignedTo: '',
+  assignedTo: '__pool__',
   priority: 'medium',
+}
+
+function taskToFormState(task: any): FormState {
+  const aid = task.assignedTo?._id ?? task.assignedTo
+  const assignedTo = aid ? String(aid) : '__pool__'
+  let deadline = ''
+  if (task.deadline) {
+    const d = new Date(task.deadline)
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      const hh = String(d.getHours()).padStart(2, '0')
+      const mm = String(d.getMinutes()).padStart(2, '0')
+      deadline = `${y}-${m}-${day}T${hh}:${mm}`
+    }
+  }
+  return {
+    title: task.title ?? '',
+    description: task.description ?? '',
+    contributionType: task.contributionType ?? '',
+    category: (task.category as TaskCategory) ?? 'development',
+    points: String(task.points ?? 10),
+    deadline,
+    assignedTo,
+    priority: (task.priority as Priority) ?? 'medium',
+  }
+}
+
+function isTaskCreator(task: any, userId: string | undefined) {
+  if (!userId) return false
+  const cb = task.createdBy?._id ?? task.createdBy
+  return cb != null && String(cb) === String(userId)
+}
+
+type AdminConfirm =
+  | null
+  | { kind: 'approve_submission'; taskId: string; title: string }
+  | { kind: 'reject_submission'; taskId: string; title: string }
+  | { kind: 'delete_task'; taskId: string; title: string }
+  | {
+      kind: 'approve_assignment'
+      taskId: string
+      userId: string
+      title: string
+      userName: string
+    }
+  | {
+      kind: 'reject_assignment'
+      taskId: string
+      userId: string
+      title: string
+      userName: string
+    }
+  | { kind: 'approve_user'; userId: string; name: string }
+  | { kind: 'reject_user'; userId: string; name: string }
+
+function adminConfirmMeta(c: NonNullable<AdminConfirm>) {
+  switch (c.kind) {
+    case 'approve_submission':
+      return {
+        title: 'Approve this submission?',
+        description: `Mark "${c.title}" as completed? The contributor will be notified.`,
+        actionLabel: 'Yes, approve',
+        destructive: false,
+      }
+    case 'reject_submission':
+      return {
+        title: 'Reject this submission?',
+        description: `Send "${c.title}" back to in progress so the contributor can revise and resubmit. They will be notified.`,
+        actionLabel: 'Yes, reject',
+        destructive: true,
+      }
+    case 'delete_task':
+      return {
+        title: 'Delete this task?',
+        description: `Permanently delete "${c.title}"? This cannot be undone.`,
+        actionLabel: 'Yes, delete',
+        destructive: true,
+      }
+    case 'approve_assignment':
+      return {
+        title: 'Assign this task?',
+        description: `Approve ${c.userName} for "${c.title}"? They will be assigned and other requests cleared.`,
+        actionLabel: 'Yes, assign',
+        destructive: false,
+      }
+    case 'reject_assignment':
+      return {
+        title: 'Decline this request?',
+        description: `Remove ${c.userName}'s request for "${c.title}"?`,
+        actionLabel: 'Yes, decline',
+        destructive: true,
+      }
+    case 'approve_user':
+      return {
+        title: 'Approve this account?',
+        description: `Allow ${c.name} to log in and use the dashboard?`,
+        actionLabel: 'Yes, approve',
+        destructive: false,
+      }
+    case 'reject_user':
+      return {
+        title: 'Reject this signup?',
+        description: `${c.name} will not be able to sign in with this account.`,
+        actionLabel: 'Yes, reject',
+        destructive: true,
+      }
+  }
 }
 
 export default function AdminPage() {
@@ -115,17 +248,25 @@ export default function AdminPage() {
   if (!currentUser) return null
   const [tasks, setTasks] = useState<Task[]>([])
   const [view, setView] = useState<'tasks' | 'users'>('tasks')
-  const [showCreate, setShowCreate] = useState(false)
+  const [taskForm, setTaskForm] = useState<{ mode: 'create' } | { mode: 'edit'; taskId: string } | null>(null)
   const [viewTask, setViewTask] = useState<Task | null>(null)
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [members, setMembers] = useState<any[]>([])
   const [stats, setStats] = useState<{ totalUsers: number; totalTasks: number; completedTasks: number } | null>(null)
+  const [pendingAssignmentTasks, setPendingAssignmentTasks] = useState<any[]>([])
+  const [confirm, setConfirm] = useState<AdminConfirm>(null)
 
   function formatDate(value: string | Date | undefined) {
     if (!value) return '—'
     const d = typeof value === 'string' ? new Date(value) : value
     if (Number.isNaN(d.getTime())) return '—'
     return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+
+  function refreshPendingAssignments() {
+    apiFetch<any[]>('/admin/pending-assignment-requests')
+      .then(setPendingAssignmentTasks)
+      .catch(() => setPendingAssignmentTasks([]))
   }
 
   useEffect(() => {
@@ -138,6 +279,7 @@ export default function AdminPage() {
     apiFetch<any>('/admin/stats')
       .then(setStats)
       .catch(() => setStats(null))
+    refreshPendingAssignments()
   }, [])
 
   const canManageUsers = currentUser.role === 'admin'
@@ -157,12 +299,14 @@ export default function AdminPage() {
   }
 
   function handleCreate() {
-    if (!form.title || !form.assignedTo || !form.deadline) return
+    if (!form.title || !form.deadline || !form.contributionType) return
+    const assignPayload =
+      form.assignedTo && form.assignedTo !== '__pool__' ? form.assignedTo : null
     const payload = {
       title: form.title,
       description: form.description,
       points: parseInt(form.points) || 10,
-      assignedTo: form.assignedTo,
+      assignedTo: assignPayload,
       deadline: form.deadline,
       category: form.category,
       contributionType: form.contributionType || undefined,
@@ -175,7 +319,42 @@ export default function AdminPage() {
       .then((task) => {
         setTasks((prev) => [task, ...prev])
         setForm(DEFAULT_FORM)
-        setShowCreate(false)
+        setTaskForm(null)
+      })
+      .catch(() => {})
+  }
+
+  function handleUpdateTask() {
+    if (!taskForm || taskForm.mode !== 'edit') return
+    if (!form.title || !form.deadline || !form.contributionType) return
+    const taskId = taskForm.taskId
+    const assignPayload =
+      form.assignedTo && form.assignedTo !== '__pool__' ? form.assignedTo : null
+    const payload = {
+      title: form.title,
+      description: form.description,
+      points: parseInt(form.points) || 10,
+      assignedTo: assignPayload,
+      deadline: form.deadline,
+      category: form.category,
+      contributionType: form.contributionType || undefined,
+      priority: form.priority,
+    }
+    apiFetch<Task>(`/admin/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+      .then((task) => {
+        setTasks((prev) =>
+          prev.map((t) => (((t as any)._id ?? t.id) === taskId ? { ...t, ...task } : t)),
+        )
+        setViewTask((vt) => {
+          if (!vt) return vt
+          const vid = (vt as any)._id ?? vt.id
+          return vid === taskId ? ({ ...vt, ...task } as Task) : vt
+        })
+        setForm(DEFAULT_FORM)
+        setTaskForm(null)
       })
       .catch(() => {})
   }
@@ -194,12 +373,84 @@ export default function AdminPage() {
     setViewTask(null)
   }
 
+  function handleRejectSubmission(taskId: string) {
+    apiFetch<Task>(`/admin/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'in_progress' }),
+    }).catch(() => {})
+    setTasks((prev) =>
+      prev.map((t) => {
+        const tid = (t as any)._id ?? t.id
+        return tid === taskId ? { ...t, status: 'in_progress' } : t
+      })
+    )
+    setViewTask(null)
+  }
+
   function handleDelete(taskId: string) {
     apiFetch(`/admin/tasks/${taskId}`, {
       method: 'DELETE',
     }).catch(() => {})
     setTasks((prev) => prev.filter((t) => ((t as any)._id ?? t.id) !== taskId))
     setViewTask(null)
+  }
+
+  function handleApproveAssignment(taskId: string, userId: string) {
+    apiFetch(`/admin/tasks/${taskId}/approve-assignment`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    })
+      .then(() => {
+        refreshPendingAssignments()
+        apiFetch<Task[]>('/admin/tasks').then(setTasks)
+      })
+      .catch(() => {})
+  }
+
+  function handleRejectAssignment(taskId: string, userId: string) {
+    apiFetch(`/admin/tasks/${taskId}/reject-assignment`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    })
+      .then(() => refreshPendingAssignments())
+      .catch(() => {})
+  }
+
+  function executeConfirm() {
+    if (!confirm) return
+    const c = confirm
+    setConfirm(null)
+    switch (c.kind) {
+      case 'approve_submission':
+        handleApprove(c.taskId)
+        break
+      case 'reject_submission':
+        handleRejectSubmission(c.taskId)
+        break
+      case 'delete_task':
+        handleDelete(c.taskId)
+        break
+      case 'approve_assignment':
+        handleApproveAssignment(c.taskId, c.userId)
+        break
+      case 'reject_assignment':
+        handleRejectAssignment(c.taskId, c.userId)
+        break
+      case 'approve_user':
+        apiFetch(`/admin/users/${c.userId}/approve`, { method: 'POST' }).catch(() => {})
+        setMembers((prev) =>
+          prev.map((u) => (String(u._id) === c.userId ? { ...u, status: 'active' } : u)),
+        )
+        break
+      case 'reject_user':
+        apiFetch(`/admin/users/${c.userId}/reject`, { method: 'POST' }).catch(() => {})
+        setMembers((prev) =>
+          prev.map((u) => (String(u._id) === c.userId ? { ...u, status: 'rejected' } : u)),
+        )
+        break
+      default:
+        break
+    }
   }
 
   const submitted = tasks.filter((t) => t.status === 'submitted')
@@ -260,11 +511,101 @@ export default function AdminPage() {
             )}
           </div>
           {view === 'tasks' && (
-            <Button onClick={() => setShowCreate(true)} className="bg-primary text-primary-foreground neon-glow-purple gap-2">
+            <Button
+              onClick={() => {
+                setForm(DEFAULT_FORM)
+                setTaskForm({ mode: 'create' })
+              }}
+              className="bg-primary text-primary-foreground neon-glow-purple gap-2"
+            >
               <Plus className="size-4" /> Create Task
             </Button>
           )}
         </div>
+
+        {view === 'tasks' && pendingAssignmentTasks.length > 0 && (
+          <div className="glass rounded-2xl border border-primary/25 bg-primary/[0.04] p-5">
+            <h3 className="mb-4 flex items-center gap-2 font-semibold text-primary">
+              <UserPlus className="size-4" /> Assignment requests ({pendingAssignmentTasks.length} tasks)
+            </h3>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Contributors asked to work on these open pool tasks. Approve to assign them, or decline to remove the request.
+            </p>
+            <div className="space-y-4">
+              {pendingAssignmentTasks.map((task: any) => (
+                <div
+                  key={task._id ?? task.id}
+                  className="rounded-xl border border-border/60 bg-card/40 px-4 py-3"
+                >
+                  <p className="font-medium text-sm">{task.title}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {task.points} pts · Open pool
+                  </p>
+                  <div className="mt-3 flex flex-col gap-2">
+                    {(task.pendingAssignmentRequests ?? []).map((req: any) => {
+                      const uid = req.user?._id ?? req.user
+                      const uname = req.user?.name ?? 'Contributor'
+                      return (
+                        <div
+                          key={String(uid)}
+                          className="flex flex-col gap-2 rounded-lg border border-border/50 bg-background/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <AvatarCircle initials={uname.slice(0, 2)} size="sm" />
+                            <span className="truncate text-sm">{uname}</span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {req.requestedAt
+                                ? new Date(req.requestedAt).toLocaleString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : ''}
+                            </span>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <Button
+                              size="sm"
+                              className="gap-1 bg-primary/90 text-primary-foreground"
+                              onClick={() =>
+                                setConfirm({
+                                  kind: 'approve_assignment',
+                                  taskId: String(task._id ?? task.id),
+                                  userId: String(uid),
+                                  title: task.title ?? 'this task',
+                                  userName: uname,
+                                })
+                              }
+                            >
+                              <Check className="size-3.5" /> Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1 text-muted-foreground"
+                              onClick={() =>
+                                setConfirm({
+                                  kind: 'reject_assignment',
+                                  taskId: String(task._id ?? task.id),
+                                  userId: String(uid),
+                                  title: task.title ?? 'this task',
+                                  userName: uname,
+                                })
+                              }
+                            >
+                              <XCircle className="size-3.5" /> Decline
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {view === 'tasks' && submitted.length > 0 && (
           <div className="glass rounded-2xl border border-yellow-400/20 p-5">
@@ -288,11 +629,35 @@ export default function AdminPage() {
                         <span className="text-xs font-mono text-primary">{task.points} pts</span>
                       </div>
                     </div>
-                    <div className="flex gap-2 shrink-0">
+                    <div className="flex flex-wrap gap-2 shrink-0">
                       <Button size="sm" variant="ghost" onClick={() => setViewTask(task)} className="text-xs">
                         Review
                       </Button>
-                      <Button size="sm" onClick={() => handleApprove(task._id ?? task.id)} className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 text-xs gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'reject_submission',
+                            taskId: String(task._id ?? task.id),
+                            title: task.title ?? 'this task',
+                          })
+                        }
+                        className="border-destructive/40 text-destructive hover:bg-destructive/10 text-xs gap-1"
+                      >
+                        <XCircle className="size-3" /> Reject
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'approve_submission',
+                            taskId: String(task._id ?? task.id),
+                            title: task.title ?? 'this task',
+                          })
+                        }
+                        className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 text-xs gap-1"
+                      >
                         <CheckCircle2 className="size-3" /> Approve
                       </Button>
                     </div>
@@ -318,19 +683,25 @@ export default function AdminPage() {
                       <p className="text-sm font-medium truncate">{task.title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Created {formatDate(task.createdAt)}
-                        {assignee?.name && (
-                          <span className="ml-2">
-                            · Assigned to <span className="font-medium">{assignee.name}</span>
-                          </span>
-                        )}
+                        <span className="ml-2">
+                          {assignee?.name ? (
+                            <>
+                              · Assigned to <span className="font-medium">{assignee.name}</span>
+                            </>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400"> · Open pool</span>
+                          )}
+                        </span>
                       </p>
                     </div>
                     <div className="hidden sm:flex items-center gap-2 shrink-0">
-                      {assignee && (
+                      {assignee ? (
                         <div className="flex items-center gap-1.5">
                           <AvatarCircle initials={assignee.name?.slice(0, 2) ?? '?'} size="sm" />
                           <span className="text-xs text-muted-foreground hidden md:block">{assignee.name}</span>
                         </div>
+                      ) : (
+                        <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">Pool</span>
                       )}
                     </div>
                     <StatusBadge value={task.category} type="category" />
@@ -340,7 +711,32 @@ export default function AdminPage() {
                       <Button size="icon" variant="ghost" className="size-7" onClick={() => setViewTask(task)}>
                         <Eye className="size-3.5" />
                       </Button>
-                      <Button size="icon" variant="ghost" className="size-7 text-destructive hover:bg-destructive/10" onClick={() => handleDelete(task._id ?? task.id)}>
+                      {isTaskCreator(task, currentUser?.id) && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-7 text-primary hover:bg-primary/10"
+                          title="Edit task (you created this)"
+                          onClick={() => {
+                            setForm(taskToFormState(task))
+                            setTaskForm({ mode: 'edit', taskId: String(task._id ?? task.id) })
+                          }}
+                        >
+                          <Pencil className="size-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-7 text-destructive hover:bg-destructive/10"
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'delete_task',
+                            taskId: String(task._id ?? task.id),
+                            title: task.title ?? 'this task',
+                          })
+                        }
+                      >
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
@@ -396,7 +792,6 @@ export default function AdminPage() {
                         <SelectItem value="intern">Intern</SelectItem>
                         <SelectItem value="associate">Associate</SelectItem>
                         <SelectItem value="lead">Lead</SelectItem>
-                        <SelectItem value="finance">Finance</SelectItem>
                           <SelectItem value="accounts">Accounts</SelectItem>
                           <SelectItem value="evangelist">Evangelist</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
@@ -408,12 +803,13 @@ export default function AdminPage() {
                           size="icon"
                           variant="ghost"
                           className="size-7 text-emerald-400 hover:bg-emerald-500/10"
-                          onClick={() => {
-                            apiFetch(`/admin/users/${user._id}/approve`, { method: 'POST' }).catch(() => {})
-                            setMembers((prev) =>
-                              prev.map((u) => (u._id === user._id ? { ...u, status: 'active' } : u)),
-                            )
-                          }}
+                          onClick={() =>
+                            setConfirm({
+                              kind: 'approve_user',
+                              userId: String(user._id),
+                              name: user.name ?? user.email ?? 'this user',
+                            })
+                          }
                         >
                           <Check className="size-3.5" />
                         </Button>
@@ -421,12 +817,13 @@ export default function AdminPage() {
                           size="icon"
                           variant="ghost"
                           className="size-7 text-destructive hover:bg-destructive/10"
-                          onClick={() => {
-                            apiFetch(`/admin/users/${user._id}/reject`, { method: 'POST' }).catch(() => {})
-                            setMembers((prev) =>
-                              prev.map((u) => (u._id === user._id ? { ...u, status: 'rejected' } : u)),
-                            )
-                          }}
+                          onClick={() =>
+                            setConfirm({
+                              kind: 'reject_user',
+                              userId: String(user._id),
+                              name: user.name ?? user.email ?? 'this user',
+                            })
+                          }
                         >
                           <Trash2 className="size-3.5" />
                         </Button>
@@ -475,20 +872,33 @@ export default function AdminPage() {
         )}
       </div>
 
-      {/* Create Task Dialog */}
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+      {/* Create / Edit Task Dialog */}
+      <Dialog
+        open={taskForm !== null}
+        onOpenChange={(o) => {
+          if (!o) setTaskForm(null)
+        }}
+      >
         <DialogContent className="max-w-2xl border-border bg-card shadow-2xl shadow-black/40 p-0 overflow-hidden">
           {/* Header with solid background */}
           <div className="bg-gradient-to-br from-primary/20 via-card to-accent/10 border-b border-border px-6 py-5">
             <DialogHeader>
               <div className="flex items-center gap-3">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-primary/20 border border-primary/30">
-                  <Plus className="size-5 text-primary" />
+                  {taskForm?.mode === 'edit' ? (
+                    <Pencil className="size-5 text-primary" />
+                  ) : (
+                    <Plus className="size-5 text-primary" />
+                  )}
                 </div>
                 <div>
-                  <DialogTitle className="text-xl">Create New Task</DialogTitle>
+                  <DialogTitle className="text-xl">
+                    {taskForm?.mode === 'edit' ? 'Edit task' : 'Create New Task'}
+                  </DialogTitle>
                   <p className="text-sm text-muted-foreground mt-0.5">
-                    Assign a contribution task to a member. Fill in the basics below — points auto-fill from the policy.
+                    {taskForm?.mode === 'edit'
+                      ? 'Only the task creator can change details. Update fields below and save.'
+                      : 'Assign a contribution task to a member. Fill in the basics below — points auto-fill from the policy.'}
                   </p>
                 </div>
               </div>
@@ -659,12 +1069,16 @@ export default function AdminPage() {
                 </div>
               </div>
               <div className="pl-8 space-y-2">
-                <label className="text-sm font-medium text-foreground">Assign to <span className="text-destructive">*</span></label>
+                <label className="text-sm font-medium text-foreground">Assign to</label>
+                <p className="text-xs text-muted-foreground">Leave as open pool so anyone can claim, or pick a member.</p>
                 <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
                   <SelectTrigger className="h-10 bg-background border-border">
-                    <SelectValue placeholder="Select a member..." />
+                    <SelectValue placeholder="Open pool or member..." />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border">
+                    <SelectItem value="__pool__" className="py-2">
+                      <span className="text-amber-600 dark:text-amber-400">Open pool (unassigned)</span>
+                    </SelectItem>
                     {members.map((m) => (
                       <SelectItem key={m._id} value={m._id} className="py-2">
                         <div className="flex items-center gap-2">
@@ -686,21 +1100,35 @@ export default function AdminPage() {
           {/* Footer with solid background */}
           <div className="border-t border-border bg-muted/30 px-6 py-4 flex items-center justify-between gap-4">
             <p className="text-xs text-muted-foreground">
-              {!form.title || !form.assignedTo || !form.deadline || !form.contributionType
-                ? 'Fill in all required fields (*) to create'
-                : 'Ready to create'}
+              {!form.title || !form.deadline || !form.contributionType
+                ? taskForm?.mode === 'edit'
+                  ? 'Fill in all required fields (*) to save'
+                  : 'Fill in all required fields (*) to create'
+                : taskForm?.mode === 'edit'
+                  ? 'Ready to save changes'
+                  : 'Ready to create'}
             </p>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setShowCreate(false)} className="border-border">
+              <Button variant="outline" onClick={() => setTaskForm(null)} className="border-border">
                 Cancel
               </Button>
-              <Button
-                onClick={handleCreate}
-                className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
-                disabled={!form.title || !form.assignedTo || !form.deadline || !form.contributionType}
-              >
-                <Plus className="size-4" /> Create Task
-              </Button>
+              {taskForm?.mode === 'edit' ? (
+                <Button
+                  onClick={handleUpdateTask}
+                  className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
+                  disabled={!form.title || !form.deadline || !form.contributionType}
+                >
+                  <Pencil className="size-4" /> Save changes
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleCreate}
+                  className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
+                  disabled={!form.title || !form.deadline || !form.contributionType}
+                >
+                  <Plus className="size-4" /> Create Task
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>
@@ -736,7 +1164,13 @@ export default function AdminPage() {
                 </div>
                 <div className="col-span-1">
                   <span className="text-muted-foreground">Assigned to: </span>
-                  <span>{(viewTask as any).assignedTo?.name ?? '—'}</span>
+                  <span>{(viewTask as any).assignedTo?.name ?? 'Open pool (unassigned)'}</span>
+                </div>
+                <div className="col-span-2 text-xs">
+                  <span className="text-muted-foreground">Created by: </span>
+                  <span className="font-medium text-foreground">
+                    {(viewTask as any).createdBy?.name ?? '—'}
+                  </span>
                 </div>
               </div>
               <div className="rounded-xl border border-border/50 bg-background/40 p-3 text-xs space-y-2">
@@ -841,13 +1275,48 @@ export default function AdminPage() {
 
             {/* Fixed footer so Close/Approve never get hidden */}
             <div className="border-t border-border/50 bg-muted/20 px-6 py-4">
-              <DialogFooter className="gap-2">
+              <DialogFooter className="gap-2 flex-wrap sm:justify-end">
                 {viewTask.status === 'submitted' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        setConfirm({
+                          kind: 'reject_submission',
+                          taskId: String((viewTask as any)._id ?? viewTask.id),
+                          title: viewTask.title ?? 'this task',
+                        })
+                      }
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10 gap-1.5"
+                    >
+                      <XCircle className="size-3.5" /> Reject
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        setConfirm({
+                          kind: 'approve_submission',
+                          taskId: String((viewTask as any)._id ?? viewTask.id),
+                          title: viewTask.title ?? 'this task',
+                        })
+                      }
+                      className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5"
+                    >
+                      <CheckCircle2 className="size-3.5" /> Approve
+                    </Button>
+                  </>
+                )}
+                {isTaskCreator(viewTask as any, currentUser?.id) && (
                   <Button
-                    onClick={() => handleApprove((viewTask as any)._id ?? viewTask.id)}
-                    className="bg-green-400/20 text-green-400 hover:bg-green-400/30 border border-green-400/30 gap-1.5"
+                    variant="outline"
+                    className="gap-1.5 border-primary/40"
+                    onClick={() => {
+                      const t = viewTask
+                      setViewTask(null)
+                      setForm(taskToFormState(t))
+                      setTaskForm({ mode: 'edit', taskId: String((t as any)._id ?? t.id) })
+                    }}
                   >
-                    <CheckCircle2 className="size-3.5" /> Approve
+                    <Pencil className="size-3.5" /> Edit
                   </Button>
                 )}
                 <Button variant="ghost" onClick={() => setViewTask(null)}>Close</Button>
@@ -856,6 +1325,33 @@ export default function AdminPage() {
           </DialogContent>
         )}
       </Dialog>
+
+      <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
+        <AlertDialogContent className="glass border-border/60">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirm ? adminConfirmMeta(confirm).title : ''}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirm ? adminConfirmMeta(confirm).description : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                confirm && adminConfirmMeta(confirm).destructive
+                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                  : undefined
+              }
+              onClick={(e) => {
+                e.preventDefault()
+                executeConfirm()
+              }}
+            >
+              {confirm ? adminConfirmMeta(confirm).actionLabel : 'Continue'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
