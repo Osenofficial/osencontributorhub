@@ -1,37 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Clock, Trophy, Zap, ArrowRight, Activity, Play, Send, UserPlus, MessageSquare } from 'lucide-react'
+import {
+  CheckCircle2,
+  Clock,
+  Trophy,
+  Zap,
+  ArrowRight,
+  Sparkles,
+  CalendarRange,
+} from 'lucide-react'
 import Link from 'next/link'
 import { useApp } from '@/lib/app-context'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { AvatarCircle } from '@/components/avatar-circle'
-import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
 import {
   MONTHLY_POINT_CAP,
   getPayoutForPoints,
 } from '@/lib/data'
-import { getContributionLabel } from '@/lib/contribution-types'
 import { apiFetch } from '@/lib/api'
-import { TaskComments } from '@/components/task-comments'
 import { cn } from '@/lib/utils'
 
 function StatCard({
@@ -50,14 +40,20 @@ function StatCard({
   glow?: string
 }) {
   return (
-    <div className={cn('glass rounded-2xl border p-5 transition-transform hover:-translate-y-0.5', glow)}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs text-muted-foreground mb-1">{title}</p>
-          <p className={cn('text-3xl font-bold', color)}>{value}</p>
-          {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
+    <div
+      className={cn(
+        'group relative overflow-hidden rounded-2xl border bg-card/30 p-5 shadow-sm backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/5',
+        glow,
+      )}
+    >
+      <div className="pointer-events-none absolute -right-6 -top-6 size-24 rounded-full bg-primary/5 blur-2xl transition-opacity group-hover:opacity-100" />
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
+          <p className={cn('mt-1.5 text-3xl font-bold tabular-nums tracking-tight', color)}>{value}</p>
+          {sub && <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{sub}</p>}
         </div>
-        <div className={cn('flex size-10 items-center justify-center rounded-xl border border-border/50 bg-background/50')}>
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-background/70 shadow-inner">
           <Icon className={cn('size-5', color)} />
         </div>
       </div>
@@ -69,30 +65,18 @@ export default function DashboardPage() {
   const { currentUser } = useApp()
   const [myTasks, setMyTasks] = useState<any[]>([])
   const [sortedUsers, setSortedUsers] = useState<any[]>([])
-  const [activities, setActivities] = useState<any[]>([])
-  const [team, setTeam] = useState<any[]>([])
-  const [submitTarget, setSubmitTarget] = useState<any | null>(null)
-  const [reassignTarget, setReassignTarget] = useState<any | null>(null)
-  const [viewTask, setViewTask] = useState<any | null>(null)
-  const [reassignTo, setReassignTo] = useState('')
-  const [submission, setSubmission] = useState({ githubLink: '', notionLink: '', googleDoc: '', comments: '' })
 
   useEffect(() => {
     apiFetch<any>('/dashboard/overview')
       .then((data) => {
         setMyTasks(data.recentTasks || [])
-        setActivities(data.activities || [])
       })
       .catch(() => {
         setMyTasks([])
-        setActivities([])
       })
     apiFetch<any[]>('/dashboard/leaderboard')
       .then(setSortedUsers)
       .catch(() => setSortedUsers([]))
-    apiFetch<any[]>('/dashboard/team')
-      .then(setTeam)
-      .catch(() => setTeam([]))
   }, [currentUser?.id])
 
   const completedTasks = myTasks.filter((t) => t.status === 'completed')
@@ -100,396 +84,179 @@ export default function DashboardPage() {
   const myRank = sortedUsers.findIndex((u) => u.userId === currentUser?.id) + 1
   const pointsPercent = Math.round(((currentUser?.points ?? 0) / MONTHLY_POINT_CAP) * 100)
 
-  function handleStart(task: any) {
-    apiFetch<any>(`/dashboard/tasks/${task._id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'in_progress' }),
-    }).catch(() => {})
-    setMyTasks((prev) => prev.map((t) => t._id === task._id ? { ...t, status: 'in_progress' } : t))
-  }
-
-  function handleSubmit() {
-    if (!submitTarget) return
-    apiFetch<any>(`/dashboard/tasks/${submitTarget._id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        status: 'submitted',
-        submission: { ...submission, submittedAt: new Date().toISOString() },
-      }),
-    }).catch(() => {})
-    setMyTasks((prev) =>
-      prev.map((t) =>
-        t._id === submitTarget._id
-          ? { ...t, status: 'submitted', submission: { ...submission, submittedAt: new Date().toISOString() } }
-          : t,
-      ),
-    )
-    setSubmitTarget(null)
-    setSubmission({ githubLink: '', notionLink: '', googleDoc: '', comments: '' })
-  }
-
-  function handleReassign() {
-    if (!reassignTarget || !reassignTo) return
-    apiFetch<any>(`/dashboard/tasks/${reassignTarget._id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ assignedTo: reassignTo }),
-    })
-      .then(() => {
-        setMyTasks((prev) => prev.filter((t) => t._id !== reassignTarget._id))
-        setReassignTarget(null)
-        setReassignTo('')
-      })
-      .catch(() => {})
-  }
+  const todayLabel = new Date().toLocaleDateString('en-IN', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
 
   return (
-    <div className="flex flex-col min-h-full">
+    <div className="flex min-h-full flex-col">
       <DashboardTopbar title="Dashboard" />
 
-      <div className="flex-1 p-6 space-y-6">
-        {/* Welcome */}
-        <div className="glass rounded-2xl border border-primary/20 p-5 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <AvatarCircle initials={currentUser?.avatar || currentUser?.name?.slice(0, 2) || '?'} src={currentUser?.avatarSrc} size="lg" />
-            <div>
-              <h2 className="text-xl font-bold">Welcome back, {currentUser?.name?.split(' ')[0] ?? 'there'}</h2>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                {currentUser?.role === 'admin'
-                  ? 'You have admin access to manage all tasks and contributors.'
-                  : `You have ${inProgressTasks.length} task${inProgressTasks.length !== 1 ? 's' : ''} in progress.`}
-              </p>
-            </div>
-          </div>
-          <div className="hidden md:flex items-center gap-2 text-sm text-muted-foreground">
-            <Zap className="size-4 text-primary" />
-            <span className="font-bold text-primary text-lg">{currentUser?.points ?? 0}</span>
-            <span>/ {MONTHLY_POINT_CAP} pts this month</span>
-          </div>
-        </div>
-
-        {/* Stats grid */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            title="Total Points"
-            value={currentUser?.points ?? 0}
-            sub={(() => {
-              const pts = currentUser?.points ?? 0
-              const { amount, tierLabel } = getPayoutForPoints(pts)
-              return amount > 0 ? `Payout: ₹${amount} (${tierLabel})` : tierLabel
-            })()}
-            icon={Zap}
-            color="text-primary"
-            glow="border-primary/20"
-          />
-          <StatCard
-            title="Tasks Completed"
-            value={completedTasks.length}
-            sub="All time"
-            icon={CheckCircle2}
-            color="text-green-400"
-            glow="border-green-400/20"
-          />
-          <StatCard
-            title="In Progress"
-            value={inProgressTasks.length}
-            sub="Active tasks"
-            icon={Clock}
-            color="text-yellow-400"
-            glow="border-yellow-400/20"
-          />
-          {myRank > 0 && (
-            <StatCard
-              title="Leaderboard Rank"
-              value={`#${myRank}`}
-              sub={`of ${sortedUsers.length} contributors`}
-              icon={Trophy}
-              color="text-neon-cyan"
-              glow="border-accent/20"
-            />
-          )}
-        </div>
-
-        {/* Monthly points progress */}
-        <div className="glass rounded-2xl border p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold">Monthly Points Progress</h3>
-            <span className="text-sm font-mono text-primary">{currentUser?.points ?? 0} / {MONTHLY_POINT_CAP}</span>
-          </div>
-          <Progress value={pointsPercent} className="h-2 bg-muted" />
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-muted-foreground">{pointsPercent}% of monthly cap</span>
-            <span className="text-xs text-muted-foreground">{MONTHLY_POINT_CAP - (currentUser?.points ?? 0)} pts remaining</span>
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* My Tasks */}
-          <div className="glass rounded-2xl border p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="font-semibold">My Tasks</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Start, submit, or reassign</p>
+      <div className="relative flex-1">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-primary/[0.07] to-transparent" />
+        <div className="relative mx-auto max-w-6xl space-y-8 px-4 pb-10 pt-2 sm:px-6 lg:px-8">
+          {/* Hero */}
+          <section className="overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-card/90 via-card/60 to-primary/[0.06] p-6 shadow-lg shadow-primary/5 sm:p-8">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4 sm:gap-5">
+                <div className="relative shrink-0">
+                  <div className="absolute inset-0 rounded-full bg-primary/25 blur-xl" />
+                  <div className="relative rounded-full ring-2 ring-primary/30 ring-offset-2 ring-offset-background">
+                    <AvatarCircle
+                      initials={currentUser?.avatar || currentUser?.name?.slice(0, 2) || '?'}
+                      src={currentUser?.avatarSrc}
+                      size="lg"
+                    />
+                  </div>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Sparkles className="size-4 text-primary" aria-hidden />
+                    <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{todayLabel}</p>
+                  </div>
+                  <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                    Hi, {currentUser?.name?.split(' ')[0] ?? 'there'}
+                  </h1>
+                  <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                    {currentUser?.role === 'admin'
+                      ? 'Manage contributors, review work, and keep the program moving from here.'
+                      : inProgressTasks.length > 0
+                        ? `You’re making progress — ${inProgressTasks.length} active task${inProgressTasks.length !== 1 ? 's' : ''} right now. Finish strong!`
+                        : 'Open My tasks for your board, or browse the full program list under All tasks.'}
+                  </p>
+                </div>
               </div>
-              <Link href="/dashboard/tasks">
-                <Button variant="ghost" size="sm" className="gap-1 text-xs text-muted-foreground hover:text-primary">
-                  View all <ArrowRight className="size-3" />
-                </Button>
-              </Link>
-            </div>
-            <div className="space-y-3">
-              {myTasks.length === 0 ? (
-                <div className="text-center py-6 space-y-3">
-                  <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
-                  <p className="text-xs text-muted-foreground">Ask your admin or lead to assign tasks to you.</p>
-                  <Link href="/dashboard/tasks">
-                    <Button variant="outline" size="sm" className="gap-1.5">
-                      Go to Tasks <ArrowRight className="size-3" />
-                    </Button>
-                  </Link>
-                </div>
-              ) : (
-                myTasks.slice(0, 4).map((task) => {
-                  const assignee = task.assignedTo
-                  const currentAssigneeId = assignee?._id ?? task.assignedTo
-                  const othersCount = team.filter((m) => m._id !== currentAssigneeId).length
-                  const canReassign = (task.status === 'todo' || task.status === 'in_progress') && othersCount > 0
-                  return (
-                    <div key={task._id ?? task.id} className="rounded-xl border border-border/50 bg-background/30 px-3 py-2.5 space-y-2">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{task.title}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            Due {task.deadline ? new Date(task.deadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-xs font-mono text-primary">{task.points} pts</span>
-                          <StatusBadge value={task.status} type="status" />
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {task.status === 'todo' && (
-                          <Button size="sm" variant="outline" className="h-7 gap-1 text-xs border-blue-400/30 text-blue-400 hover:bg-blue-400/10" onClick={() => handleStart(task)}>
-                            <Play className="size-3" /> Start
-                          </Button>
-                        )}
-                        {task.status === 'in_progress' && (
-                          <Button size="sm" className="h-7 gap-1 text-xs bg-primary/20 text-primary hover:bg-primary/30 border border-primary/30" onClick={() => setSubmitTarget(task)}>
-                            <Send className="size-3" /> Submit
-                          </Button>
-                        )}
-                        {task.status === 'submitted' && (
-                          <span className="text-xs text-yellow-400 py-1">Awaiting review</span>
-                        )}
-                        {canReassign && (
-                          <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => setReassignTarget(task)}>
-                            <UserPlus className="size-3" /> Reassign
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => setViewTask(task)}>
-                          <MessageSquare className="size-3" /> Comments
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Community Leaderboard preview */}
-          <div className="glass rounded-2xl border p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold">Community Leaderboard</h3>
-              <Link href="/dashboard/leaderboard">
-                <Button variant="ghost" size="sm" className="gap-1 text-xs text-muted-foreground hover:text-primary">
-                  Full view <ArrowRight className="size-3" />
-                </Button>
-              </Link>
-            </div>
-            <div className="space-y-2">
-              {sortedUsers.slice(0, 5).map((user, i) => (
-                <div
-                  key={user.userId ?? user.id ?? i}
-                  className={cn(
-                    'flex items-center gap-3 rounded-xl px-3 py-2 transition-colors',
-                    (user.userId ?? user.id) === currentUser?.id ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30',
-                  )}
-                >
-                  <span className={cn('w-5 text-center text-sm font-bold shrink-0', i === 0 ? 'text-yellow-400' : i === 1 ? 'text-slate-400' : i === 2 ? 'text-amber-600' : 'text-muted-foreground')}>
-                    {i + 1}
-                  </span>
-                  <AvatarCircle initials={user.initials ?? user.name?.slice(0, 2) ?? '?'} src={user.avatar?.startsWith?.('http') ? user.avatar : undefined} size="sm" />
-                  <span className={cn('flex-1 text-sm font-medium', (user.userId ?? user.id) === currentUser?.id && 'text-primary')}>
-                    {user.name}
-                    {(user.userId ?? user.id) === currentUser?.id && <span className="ml-1 text-xs text-muted-foreground">(you)</span>}
-                  </span>
-                  <span className="text-sm font-bold text-primary shrink-0">{user.totalPoints ?? user.points ?? 0}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Recent Activity */}
-        <div className="glass rounded-2xl border p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Activity className="size-4 text-primary" />
-            <h3 className="font-semibold">Recent Activity</h3>
-          </div>
-          <div className="space-y-3">
-            {activities.slice(0, 5).map((activity, idx) => {
-              const user = sortedUsers.find((u) => u.userId === activity.userId)
-              return (
-                <div key={activity._id ?? activity.id ?? idx} className="flex items-start gap-3">
-                  <AvatarCircle initials={user?.initials ?? user?.name?.slice(0, 2) ?? '?'} src={user?.avatar?.startsWith?.('http') ? user.avatar : undefined} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm">
-                      <span className="font-medium">{user?.name}</span>{' '}
-                      <span className="text-muted-foreground">{activity.action}</span>{' '}
-                      <span className="text-foreground/80">{activity.detail}</span>
-                      {activity.points && (
-                        <span className="ml-1 text-xs font-mono text-primary">+{activity.points} pts</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {new Date(activity.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:flex-col lg:items-end">
+                <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-background/50 px-4 py-3 backdrop-blur-sm">
+                  <div className="flex size-10 items-center justify-center rounded-xl bg-primary/15">
+                    <Zap className="size-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">This month</p>
+                    <p className="text-xl font-bold tabular-nums text-primary">
+                      {currentUser?.points ?? 0}
+                      <span className="text-sm font-normal text-muted-foreground"> / {MONTHLY_POINT_CAP}</span>
                     </p>
                   </div>
                 </div>
-              )
-            })}
+                <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-full lg:flex-col">
+                  <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
+                    <Button variant="outline" className="w-full gap-2 border-primary/25" size="lg">
+                      All tasks
+                      <ArrowRight className="size-4" />
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/tasks" className="w-full sm:w-auto lg:w-full">
+                    <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
+                      My tasks
+                      <ArrowRight className="size-4" />
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Stats */}
+          <section aria-label="Your stats">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Total points"
+                value={currentUser?.points ?? 0}
+                sub={(() => {
+                  const pts = currentUser?.points ?? 0
+                  const { amount, tierLabel } = getPayoutForPoints(pts)
+                  return amount > 0 ? `Est. payout ₹${amount} · ${tierLabel}` : tierLabel
+                })()}
+                icon={Zap}
+                color="text-primary"
+                glow="border-primary/25"
+              />
+              <StatCard
+                title="Completed"
+                value={completedTasks.length}
+                sub="Tasks finished (all time)"
+                icon={CheckCircle2}
+                color="text-green-400"
+                glow="border-green-400/25"
+              />
+              <StatCard
+                title="In progress"
+                value={inProgressTasks.length}
+                sub="Currently active"
+                icon={Clock}
+                color="text-yellow-400"
+                glow="border-yellow-400/25"
+              />
+              {myRank > 0 ? (
+                <StatCard
+                  title="Leaderboard"
+                  value={`#${myRank}`}
+                  sub={`of ${sortedUsers.length} contributors`}
+                  icon={Trophy}
+                  color="text-cyan-400"
+                  glow="border-cyan-400/25"
+                />
+              ) : (
+                <Link href="/dashboard/leaderboard" className="block">
+                  <div className="group relative h-full overflow-hidden rounded-2xl border border-dashed border-border/80 bg-card/20 p-5 transition-all hover:border-primary/40 hover:bg-card/40">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Leaderboard</p>
+                        <p className="mt-1.5 text-lg font-semibold text-muted-foreground">Not ranked yet</p>
+                        <p className="mt-1.5 text-xs text-muted-foreground">Earn points to appear on the board →</p>
+                      </div>
+                      <Trophy className="size-5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+                    </div>
+                  </div>
+                </Link>
+              )}
+            </div>
+          </section>
+
+          {/* Progress + report */}
+          <div className="grid gap-4 lg:grid-cols-5 lg:gap-6">
+            <div className="rounded-2xl border border-border/60 bg-card/40 p-5 shadow-sm backdrop-blur-sm lg:col-span-3">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold tracking-tight">Monthly points</h2>
+                  <p className="text-xs text-muted-foreground">Caps reset each month — keep contributing.</p>
+                </div>
+                <span className="font-mono text-sm text-primary">
+                  {currentUser?.points ?? 0} / {MONTHLY_POINT_CAP}
+                </span>
+              </div>
+              <Progress value={pointsPercent} className="h-3 rounded-full bg-muted/80" />
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{pointsPercent}% of monthly cap</span>
+                <span className="tabular-nums">{Math.max(0, MONTHLY_POINT_CAP - (currentUser?.points ?? 0))} pts left</span>
+              </div>
+            </div>
+            <div className="flex flex-col justify-between rounded-2xl border border-primary/20 bg-primary/[0.06] p-5 lg:col-span-2">
+              <div className="flex gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/15">
+                  <CalendarRange className="size-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold">Contribution report</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Download your monthly breakdown and CSV for records or payouts.
+                  </p>
+                </div>
+              </div>
+              <Separator className="my-4 bg-border/60" />
+              <Link href="/dashboard/report" className="block">
+                <Button variant="secondary" className="w-full gap-2 border border-primary/20 bg-background/80 hover:bg-background">
+                  Open report
+                  <ArrowRight className="size-4" />
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
       </div>
-
-      {/* View Task & Comments Dialog */}
-      <Dialog open={!!viewTask} onOpenChange={(o) => !o && setViewTask(null)}>
-        <DialogContent className="max-w-lg border-border bg-card shadow-xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{viewTask?.title}</DialogTitle>
-            <p className="text-sm text-muted-foreground leading-relaxed">{viewTask?.description}</p>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge value={viewTask?.category} type="category" />
-              <StatusBadge value={viewTask?.status} type="status" />
-              <span className="text-sm font-mono text-primary font-semibold">{viewTask?.points} pts</span>
-            </div>
-            {viewTask?.submission && (
-              <div className="rounded-lg border border-border/50 p-3 text-xs space-y-1">
-                <div className="font-semibold">Submission</div>
-                {viewTask.submission.githubLink && (
-                  <a href={viewTask.submission.githubLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
-                    {viewTask.submission.githubLink}
-                  </a>
-                )}
-                {viewTask.submission.notionLink && (
-                  <a href={viewTask.submission.notionLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">
-                    {viewTask.submission.notionLink}
-                  </a>
-                )}
-                {viewTask.submission.comments && <p className="text-muted-foreground whitespace-pre-wrap">{viewTask.submission.comments}</p>}
-              </div>
-            )}
-            <div className="border-t border-border/50 pt-4">
-              <TaskComments taskId={viewTask?._id} />
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Submit Work Dialog */}
-      <Dialog open={!!submitTarget} onOpenChange={(o) => !o && setSubmitTarget(null)}>
-        <DialogContent className="max-w-md border-border bg-card shadow-xl p-0 overflow-hidden">
-          <div className="border-b border-border px-6 py-4 bg-muted/30">
-            <DialogHeader>
-              <DialogTitle>Submit Work</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-muted-foreground mt-1">{submitTarget?.title}</p>
-            <div className="flex items-center gap-3 mt-3 flex-wrap">
-              <StatusBadge value={submitTarget?.category} type="category" />
-              <span className="text-sm font-mono text-primary font-semibold">{submitTarget?.points} pts</span>
-              <span className="text-xs text-muted-foreground">
-                {submitTarget && getContributionLabel(submitTarget.category, submitTarget.contributionType)}
-              </span>
-            </div>
-          </div>
-          <div className="space-y-3 py-4 px-6">
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">GitHub Link</label>
-              <Input placeholder="https://github.com/..." value={submission.githubLink}
-                onChange={(e) => setSubmission((s) => ({ ...s, githubLink: e.target.value }))}
-                className="bg-background border-border text-sm" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">Notion Link</label>
-              <Input placeholder="https://notion.so/..." value={submission.notionLink}
-                onChange={(e) => setSubmission((s) => ({ ...s, notionLink: e.target.value }))}
-                className="bg-background border-border text-sm" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">Google Doc Link</label>
-              <Input placeholder="https://docs.google.com/..." value={submission.googleDoc}
-                onChange={(e) => setSubmission((s) => ({ ...s, googleDoc: e.target.value }))}
-                className="bg-background border-border text-sm" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">Comments</label>
-              <Textarea placeholder="Add any notes for the reviewer..." value={submission.comments}
-                onChange={(e) => setSubmission((s) => ({ ...s, comments: e.target.value }))}
-                className="bg-background border-border text-sm min-h-20 resize-none" />
-            </div>
-          </div>
-          <DialogFooter className="px-6 pb-6 pt-0">
-            <Button variant="ghost" onClick={() => setSubmitTarget(null)}>Cancel</Button>
-            <Button onClick={handleSubmit} className="bg-primary text-primary-foreground gap-1.5">
-              <Send className="size-3.5" /> Submit
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reassign Dialog */}
-      <Dialog open={!!reassignTarget} onOpenChange={(o) => !o && setReassignTarget(null)}>
-        <DialogContent className="max-w-sm border-border bg-card">
-          <DialogHeader>
-            <DialogTitle>Assign to someone else</DialogTitle>
-            <p className="text-sm text-muted-foreground">{reassignTarget?.title}</p>
-          </DialogHeader>
-          <div className="space-y-5 py-2">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Assign to</label>
-              <Select value={reassignTo} onValueChange={setReassignTo}>
-                <SelectTrigger className="bg-background border-border">
-                  <SelectValue placeholder="Select a team member..." />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {team
-                    .filter((m) => {
-                      const currentId = reassignTarget?.assignedTo?._id ?? reassignTarget?.assignedTo
-                      return m._id !== currentId
-                    })
-                    .map((m) => (
-                      <SelectItem key={m._id} value={m._id} className="py-2">
-                        <div className="flex items-center gap-2">
-                          <AvatarCircle initials={m.name?.slice(0, 2) || '?'} src={m.avatar?.startsWith?.('http') ? m.avatar : undefined} size="sm" />
-                          <span>{m.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setReassignTarget(null)}>Cancel</Button>
-            <Button onClick={handleReassign} disabled={!reassignTo} className="gap-1.5">
-              <UserPlus className="size-3.5" /> Reassign
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
