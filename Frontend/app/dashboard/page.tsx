@@ -9,6 +9,7 @@ import {
   ArrowRight,
   Sparkles,
   CalendarRange,
+  Send,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useApp } from '@/lib/app-context'
@@ -141,12 +142,20 @@ export default function DashboardPage() {
                     </p>
                   </div>
                 </div>
-                <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
-                  <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
-                    All tasks
-                    <ArrowRight className="size-4" />
-                  </Button>
-                </Link>
+                <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-full lg:flex-col">
+                  <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
+                    <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
+                      All tasks
+                      <ArrowRight className="size-4" />
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/submit-task" className="w-full sm:w-auto lg:w-full">
+                    <Button variant="outline" className="w-full gap-2 border-primary/30" size="lg">
+                      <Send className="size-4" />
+                      Submit task
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </div>
           </section>
