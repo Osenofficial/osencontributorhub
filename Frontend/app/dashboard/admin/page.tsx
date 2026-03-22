@@ -89,6 +89,35 @@ const CONTRIBUTION_TYPES = [
     ],
   },
   {
+    group: 'Community',
+    items: [
+      {
+        id: 'interview_taken_over5',
+        label: 'Interviews taken (more than 5)',
+        points: 10,
+        category: 'community' as TaskCategory,
+      },
+      {
+        id: 'interview_taken_over10',
+        label: 'Interviews taken (more than 10)',
+        points: 21,
+        category: 'community' as TaskCategory,
+      },
+      {
+        id: 'basic_community_work',
+        label: 'Basic community work',
+        points: 3,
+        category: 'community' as TaskCategory,
+      },
+      {
+        id: 'social_media_community',
+        label: 'Social media',
+        points: 3,
+        category: 'community' as TaskCategory,
+      },
+    ],
+  },
+  {
     group: 'Community Program & Hackathon',
     items: [
       { id: 'program_manager', label: 'Programme manager', points: 15, category: 'community' as TaskCategory },
