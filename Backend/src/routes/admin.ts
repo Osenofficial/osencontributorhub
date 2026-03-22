@@ -324,24 +324,19 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
   }
 });
 
+/** Only admins may hard-delete. Leads must use POST /lead-action-requests (type: delete_task). */
 adminRouter.delete("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
-    const isAdmin = req.user!.role === "admin";
-    const leadNeedsApproval =
-      req.user!.role === "lead" && !taskCreatedByUser(task, req.user!._id);
-    if (leadNeedsApproval) {
+    if (req.user!.role !== "admin") {
       return res.status(403).json({
         code: "LEAD_REQUIRES_APPROVAL",
         message:
-          "Leads can only delete tasks they created. Submit a delete request for admin approval.",
+          "Leads cannot delete tasks directly. Submit a delete request from the panel — an admin must approve it.",
       });
-    }
-    if (!isAdmin && !taskCreatedByUser(task, req.user!._id)) {
-      return res.status(403).json({ message: "Only the task creator or an admin can delete this task" });
     }
     await Task.findByIdAndDelete(req.params.id);
     res.json({ success: true });
@@ -471,7 +466,8 @@ adminRouter.post("/lead-action-requests", requireRole("lead"), async (req: AuthR
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
-    if (taskCreatedByUser(task, req.user!._id)) {
+    /** Deleting always needs admin approval for leads, including tasks they created. */
+    if (taskCreatedByUser(task, req.user!._id) && type !== "delete_task") {
       return res.status(400).json({
         message: "Use normal task actions for tasks you created — no approval needed.",
       });
