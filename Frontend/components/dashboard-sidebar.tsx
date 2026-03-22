@@ -13,6 +13,7 @@ import {
   Star,
   Receipt,
   Users,
+  Send,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -23,6 +24,7 @@ import { apiFetch } from '@/lib/api'
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
+  { href: '/dashboard/submit-task', label: 'Submit task', icon: Send },
   { href: '/dashboard/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
@@ -31,12 +33,14 @@ const NAV_ITEMS = [
 
 const NAV_ITEMS_INVOICES_EVANGELIST = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/submit-task', label: 'Submit task', icon: Send },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
 ]
 
 const NAV_ITEMS_INVOICES_ACCOUNTS = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/submit-task', label: 'Submit task', icon: Send },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
 ]
