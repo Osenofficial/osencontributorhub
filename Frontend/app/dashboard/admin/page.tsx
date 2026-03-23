@@ -22,6 +22,7 @@ import { AvatarCircle } from '@/components/avatar-circle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -54,10 +55,7 @@ import {
   Task,
   TaskCategory,
   Priority,
-  PAYOUT_TIERS,
-  MIN_POINTS_FOR_PAYOUT,
   MAX_PAYOUT_INR,
-  MONTHLY_POINT_CAP,
   URGENT_TASK_BONUS_POINTS,
 } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
@@ -178,7 +176,7 @@ function adminConfirmMeta(c: NonNullable<AdminConfirm>, userRole?: string) {
     case 'reject_submission':
       return {
         title: 'Reject this submission?',
-        description: `Send "${c.title}" back to in progress so the contributor can revise and resubmit. They will be notified.`,
+        description: `Mark "${c.title}" as rejected so the contributor can revise and resubmit. They will be notified.`,
         actionLabel: 'Yes, reject',
         destructive: true,
       }
@@ -241,6 +239,7 @@ export default function AdminPage() {
   const [pendingAssignmentTasks, setPendingAssignmentTasks] = useState<any[]>([])
   const [leadActionRequests, setLeadActionRequests] = useState<any[]>([])
   const [confirm, setConfirm] = useState<AdminConfirm>(null)
+  const [rejectNote, setRejectNote] = useState('')
 
   function formatDate(value: string | Date | undefined) {
     if (!value) return '—'
@@ -396,23 +395,24 @@ export default function AdminPage() {
     setViewTask(null)
   }
 
-  function handleRejectSubmission(taskId: string) {
+  function handleRejectSubmission(taskId: string, note?: string) {
+    const rejectComment = note?.trim()
     const t = findTaskById(taskId)
     if (canActDirectOnTask(t, currentUser)) {
       apiFetch<Task>(`/admin/tasks/${taskId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'in_progress' }),
+        body: JSON.stringify({ status: 'rejected', rejectComment }),
       }).catch(() => {})
       setTasks((prev) =>
         prev.map((task) => {
           const tid = (task as any)._id ?? task.id
-          return tid === taskId ? { ...task, status: 'in_progress' } : task
+          return tid === taskId ? { ...task, status: 'rejected' } : task
         }),
       )
     } else {
       apiFetch('/admin/lead-action-requests', {
         method: 'POST',
-        body: JSON.stringify({ type: 'reject_submission', taskId }),
+        body: JSON.stringify({ type: 'reject_submission', taskId, payload: { rejectComment } }),
       }).catch(() => {})
     }
     setViewTask(null)
@@ -464,7 +464,7 @@ export default function AdminPage() {
         handleApprove(c.taskId)
         break
       case 'reject_submission':
-        handleRejectSubmission(c.taskId)
+        handleRejectSubmission(c.taskId, rejectNote)
         break
       case 'delete_task':
         handleDelete(c.taskId)
@@ -490,6 +490,7 @@ export default function AdminPage() {
       default:
         break
     }
+    setRejectNote('')
   }
 
   const submitted = tasks.filter((t) => t.status === 'submitted')
@@ -539,7 +540,6 @@ export default function AdminPage() {
         </div>
         <StatusBadge value={task.category} type="category" />
         <StatusBadge value={task.status} type="status" />
-        <span className="hidden shrink-0 font-mono text-xs text-primary sm:block">{task.points} pts</span>
         <div className="flex shrink-0 gap-1">
           <Button size="icon" variant="ghost" className="size-7" onClick={() => setViewTask(task)}>
             <Eye className="size-3.5" />
@@ -599,7 +599,6 @@ export default function AdminPage() {
                 <span className="text-xs text-muted-foreground">{assignee.name}</span>
               </>
             )}
-            <span className="font-mono text-xs text-primary">{task.points} pts</span>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-1.5">
@@ -1401,6 +1400,16 @@ export default function AdminPage() {
               </div>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
+                  <span className="text-muted-foreground">Contribution type: </span>
+                  <span className="text-foreground">
+                    {(viewTask as any).contributionType ?? viewTask.category ?? '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Priority: </span>
+                  <span className="text-foreground">{viewTask.priority ?? '—'}</span>
+                </div>
+                <div>
                   <span className="text-muted-foreground">Points: </span>
                   <span className="font-bold text-primary">{viewTask.points}</span>
                 </div>
@@ -1420,27 +1429,6 @@ export default function AdminPage() {
                     {(viewTask as any).createdBy?.name ?? '—'}
                   </span>
                 </div>
-              </div>
-              <div className="rounded-xl border border-border bg-secondary p-3 text-xs space-y-2 text-secondary-foreground">
-                <div className="font-semibold text-foreground">Payout (tiered by monthly points)</div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">This task</span>
-                  <span className="font-medium text-foreground">{viewTask.points} pts</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground">
-                  Payout is by <strong className="text-foreground/90">total monthly points</strong>. Min {MIN_POINTS_FOR_PAYOUT} pts to qualify.
-                </p>
-                <div className="space-y-0.5 text-[10px]">
-                  {PAYOUT_TIERS.map((t) => (
-                    <div key={t.min} className="flex justify-between">
-                      <span className="text-muted-foreground">{t.min === t.max ? t.min : `${t.min}-${t.max}`} pts</span>
-                      <span className="font-medium text-primary">₹{t.amount}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  Cap: {MONTHLY_POINT_CAP} pts = ₹{MAX_PAYOUT_INR} as per OSEN policy.
-                </p>
               </div>
               {viewTask.submission && (
                 <div className="rounded-xl border border-border bg-secondary p-4 space-y-2">
@@ -1582,13 +1570,33 @@ export default function AdminPage() {
         )}
       </Dialog>
 
-      <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
+      <AlertDialog
+        open={!!confirm}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirm(null)
+            setRejectNote('')
+          }
+        }}
+      >
         <AlertDialogContent className="glass border-border/60">
           <AlertDialogHeader>
             <AlertDialogTitle>{confirm ? adminConfirmMeta(confirm, currentUser.role).title : ''}</AlertDialogTitle>
             <AlertDialogDescription>
               {confirm ? adminConfirmMeta(confirm, currentUser.role).description : ''}
             </AlertDialogDescription>
+            {confirm?.kind === 'reject_submission' && (
+              <div className="space-y-2 pt-2">
+                <Label className="text-xs text-foreground/80">Comment for contributor (optional)</Label>
+                <Textarea
+                  placeholder="Explain what to improve before re-submitting..."
+                  value={rejectNote}
+                  onChange={(e) => setRejectNote(e.target.value.slice(0, 500))}
+                  className="min-h-[90px] bg-background text-sm"
+                />
+                <p className="text-[11px] text-muted-foreground text-right">{rejectNote.length}/500</p>
+              </div>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
