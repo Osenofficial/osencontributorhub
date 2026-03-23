@@ -237,7 +237,8 @@ exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
             const cur = task.status;
             const allowed = (cur === "todo" && nextStatus === "in_progress") ||
                 (cur === "in_progress" && nextStatus === "submitted") ||
-                (cur === "submitted" && nextStatus === "submitted");
+                (cur === "submitted" && nextStatus === "submitted") ||
+                (cur === "rejected" && (nextStatus === "in_progress" || nextStatus === "submitted"));
             if (!allowed) {
                 return res.status(400).json({
                     message: "Invalid status change. Start the task (to in progress), submit for review, or keep it submitted while you update your submission.",
@@ -267,9 +268,9 @@ exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
             }
         }
         if (submissionBody && typeof submissionBody === "object") {
-            if (!["in_progress", "submitted"].includes(task.status)) {
+            if (!["in_progress", "submitted", "rejected"].includes(task.status)) {
                 return res.status(400).json({
-                    message: "You can add or edit submission details while the task is in progress or waiting for review.",
+                    message: "You can add or edit submission details while the task is in progress, rejected, or waiting for review.",
                 });
             }
             const prev = task.submission || {};
