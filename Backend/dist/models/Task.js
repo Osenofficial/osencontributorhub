@@ -40,7 +40,7 @@ const TaskSchema = new mongoose_1.Schema({
     description: { type: String, trim: true },
     status: {
         type: String,
-        enum: ["todo", "in_progress", "submitted", "completed"],
+        enum: ["todo", "in_progress", "submitted", "rejected", "completed"],
         default: "todo",
         index: true,
     },
@@ -70,8 +70,8 @@ const TaskSchema = new mongoose_1.Schema({
         {
             actor: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
             action: { type: String, required: true },
-            fromStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
-            toStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
+            fromStatus: { type: String, enum: ["todo", "in_progress", "submitted", "rejected", "completed"] },
+            toStatus: { type: String, enum: ["todo", "in_progress", "submitted", "rejected", "completed"] },
             createdAt: { type: Date, default: Date.now },
             meta: { type: mongoose_1.Schema.Types.Mixed },
         },
