@@ -132,6 +132,11 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
         ? assignedTo
         : null;
 
+    const assignErr = await assigneeValidationError(assigneeId);
+    if (assignErr) {
+      return res.status(400).json({ message: assignErr });
+    }
+
     const task = await Task.create({
       title,
       description,
@@ -196,6 +201,24 @@ function taskCreatedByUser(task: { createdBy: unknown }, userId: unknown) {
   return String(task.createdBy) === String(userId);
 }
 
+/** These roles cannot be picked as task assignees (UI + API). */
+const ROLES_EXCLUDED_FROM_TASK_ASSIGNMENT = ["accounts", "evangelist"] as const;
+
+function parseAssigneeIdFromBody(assignedTo: unknown): string | null {
+  if (assignedTo == null || String(assignedTo).trim() === "" || assignedTo === "__pool__") return null;
+  return String(assignedTo);
+}
+
+async function assigneeValidationError(assigneeId: string | null): Promise<string | null> {
+  if (!assigneeId) return null;
+  const u = await User.findById(assigneeId).select("role");
+  if (!u) return "Assignee not found";
+  if ((ROLES_EXCLUDED_FROM_TASK_ASSIGNMENT as readonly string[]).includes(String(u.role))) {
+    return "Accounts and evangelist users cannot be assigned tasks";
+  }
+  return null;
+}
+
 function applyCreatorPayloadToTask(task: any, body: Record<string, unknown>) {
   const { title, description, deadline, category, contributionType, priority, assignedTo, points } = body;
   if (title !== undefined) task.title = String(title).trim();
@@ -255,6 +278,13 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
       }
       if (!isAdmin && !taskCreatedByUser(task, req.user!._id)) {
         return res.status(403).json({ message: "Only the task creator or an admin can edit task details" });
+      }
+      if (req.body.assignedTo !== undefined) {
+        const nextAssignee = parseAssigneeIdFromBody(req.body.assignedTo);
+        const assignErr = await assigneeValidationError(nextAssignee);
+        if (assignErr) {
+          return res.status(400).json({ message: assignErr });
+        }
       }
       applyCreatorPayloadToTask(task, req.body);
       task.history.push({
@@ -384,6 +414,11 @@ adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), 
     );
     if (!pending) {
       return res.status(400).json({ message: "No pending request from this user for this task" });
+    }
+
+    const assignErr = await assigneeValidationError(String(userId));
+    if (assignErr) {
+      return res.status(400).json({ message: assignErr });
     }
 
     task.assignedTo = userId as any;
@@ -576,8 +611,16 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
       case "delete_task":
         await Task.findByIdAndDelete(task._id);
         break;
-      case "edit_task":
-        applyCreatorPayloadToTask(task, (doc.payload || {}) as Record<string, unknown>);
+      case "edit_task": {
+        const payload = (doc.payload || {}) as Record<string, unknown>;
+        if (payload.assignedTo !== undefined) {
+          const nextAssignee = parseAssigneeIdFromBody(payload.assignedTo);
+          const assignErr = await assigneeValidationError(nextAssignee);
+          if (assignErr) {
+            return res.status(400).json({ message: assignErr });
+          }
+        }
+        applyCreatorPayloadToTask(task, payload);
         task.history.push({
           actor: adminId,
           action: "edited",
@@ -588,6 +631,7 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
         });
         await task.save();
         break;
+      }
       case "reject_submission": {
         if (task.status !== "submitted") {
           return res.status(400).json({ message: "Task is no longer submitted" });
