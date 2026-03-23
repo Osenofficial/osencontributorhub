@@ -1579,41 +1579,97 @@ export default function AdminPage() {
           }
         }}
       >
-        <AlertDialogContent className="glass border-border/60">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{confirm ? adminConfirmMeta(confirm, currentUser.role).title : ''}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirm ? adminConfirmMeta(confirm, currentUser.role).description : ''}
-            </AlertDialogDescription>
-            {confirm?.kind === 'reject_submission' && (
-              <div className="space-y-2 pt-2">
-                <Label className="text-xs text-foreground/80">Comment for contributor (optional)</Label>
-                <Textarea
-                  placeholder="Explain what to improve before re-submitting..."
-                  value={rejectNote}
-                  onChange={(e) => setRejectNote(e.target.value.slice(0, 500))}
-                  className="min-h-[90px] bg-background text-sm"
-                />
-                <p className="text-[11px] text-muted-foreground text-right">{rejectNote.length}/500</p>
+        <AlertDialogContent
+          className={cn(
+            'gap-0 overflow-hidden border-2 border-border bg-card p-0 text-card-foreground shadow-2xl shadow-black/40 sm:max-w-lg',
+            confirm?.kind === 'reject_submission' && 'sm:max-w-[26rem]',
+          )}
+        >
+          {confirm?.kind === 'reject_submission' ? (
+            <>
+              <div className="flex gap-4 border-b border-border bg-muted/80 px-5 py-4">
+                <div
+                  className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-destructive/35 bg-destructive/15"
+                  aria-hidden
+                >
+                  <XCircle className="size-6 text-destructive" />
+                </div>
+                <div className="min-w-0 flex-1 space-y-1.5 text-left">
+                  <AlertDialogTitle className="text-left text-lg font-semibold tracking-tight text-foreground">
+                    Reject this submission?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription className="text-left text-sm leading-relaxed text-muted-foreground">
+                    The task will be marked <strong className="text-foreground">Rejected</strong>. The assignee can
+                    revise and resubmit. They&apos;ll get a notification with your note (if you add one).
+                  </AlertDialogDescription>
+                </div>
               </div>
-            )}
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className={
-                confirm && adminConfirmMeta(confirm, currentUser.role).destructive
-                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                  : undefined
-              }
-              onClick={(e) => {
-                e.preventDefault()
-                executeConfirm()
-              }}
-            >
-              {confirm ? adminConfirmMeta(confirm, currentUser.role).actionLabel : 'Continue'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
+              <div className="space-y-3 bg-card px-5 py-4">
+                <div className="rounded-xl border border-border bg-secondary/80 p-4 space-y-2">
+                  <Label htmlFor="reject-contributor-note" className="text-sm font-medium text-foreground">
+                    Note for the contributor
+                    <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  </Label>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Be specific — e.g. what to fix, missing links, or quality bar. Shown in their task view.
+                  </p>
+                  <Textarea
+                    id="reject-contributor-note"
+                    placeholder="e.g. Please add the GitHub PR link and a short summary of changes…"
+                    value={rejectNote}
+                    onChange={(e) => setRejectNote(e.target.value.slice(0, 500))}
+                    className="min-h-[100px] resize-none border-border bg-background text-sm text-foreground placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-destructive/25"
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>{rejectNote.length > 0 ? 'Will be sent with the rejection' : 'No note — only a generic notice'}</span>
+                    <span className="tabular-nums">{rejectNote.length}/500</span>
+                  </div>
+                </div>
+              </div>
+              <AlertDialogFooter className="gap-2 border-t border-border bg-muted/50 px-5 py-4 sm:justify-end">
+                <AlertDialogCancel className="mt-0 border-border bg-background hover:bg-muted">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  className="gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/40"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    executeConfirm()
+                  }}
+                >
+                  <XCircle className="size-4 shrink-0" />
+                  Yes, reject submission
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader className="border-b border-border bg-muted/50 px-5 py-4 text-left">
+                <AlertDialogTitle className="text-left text-lg">
+                  {confirm ? adminConfirmMeta(confirm, currentUser.role).title : ''}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="text-left text-sm leading-relaxed">
+                  {confirm ? adminConfirmMeta(confirm, currentUser.role).description : ''}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2 border-t border-border bg-muted/30 px-5 py-4 sm:justify-end">
+                <AlertDialogCancel className="mt-0 border-border bg-background hover:bg-muted">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className={
+                    confirm && adminConfirmMeta(confirm, currentUser.role).destructive
+                      ? 'gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                      : undefined
+                  }
+                  onClick={(e) => {
+                    e.preventDefault()
+                    executeConfirm()
+                  }}
+                >
+                  {confirm ? adminConfirmMeta(confirm, currentUser.role).actionLabel : 'Continue'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
         </AlertDialogContent>
       </AlertDialog>
     </div>
