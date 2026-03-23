@@ -66,6 +66,15 @@ function userHasPendingAssignment(task: any, userId: string | undefined) {
   )
 }
 
+function getLatestRejectComment(task: any): string {
+  const history = Array.isArray(task?.history) ? [...task.history] : []
+  const latestReject = history
+    .sort((a: any, b: any) => new Date(b?.createdAt ?? 0).getTime() - new Date(a?.createdAt ?? 0).getTime())
+    .find((entry: any) => entry?.toStatus === 'rejected')
+  const note = latestReject?.meta?.rejectComment
+  return typeof note === 'string' ? note.trim() : ''
+}
+
 export default function AllTasksPage() {
   const { currentUser } = useApp()
   const [taskFeed, setTaskFeed] = useState<any[]>([])
@@ -160,6 +169,9 @@ export default function AllTasksPage() {
           case 'completed':
             statusOk = task.status === 'completed'
             break
+          case 'rejected':
+            statusOk = task.status === 'rejected'
+            break
           default:
             statusOk = true
         }
@@ -232,7 +244,7 @@ export default function AllTasksPage() {
       const payload: { status?: string; submission: typeof submissionDraft } = {
         submission: submissionDraft,
       }
-      if (options?.alsoSubmit && viewTask.status === 'in_progress') {
+      if (options?.alsoSubmit && (viewTask.status === 'in_progress' || viewTask.status === 'rejected')) {
         payload.status = 'submitted'
       }
       const updated = await patchMyTask(String(id), payload)
@@ -295,9 +307,6 @@ export default function AllTasksPage() {
         <CardHeader className="space-y-2 border-b border-border/50 bg-muted/20 px-4 pb-3 pt-4">
           <div className="flex items-start justify-between gap-2">
             <CardTitle className="line-clamp-2 text-left text-base font-semibold leading-snug">{task.title}</CardTitle>
-            <span className="shrink-0 rounded-md border border-primary/25 bg-primary/10 px-2 py-1 font-mono text-xs font-bold tabular-nums text-primary">
-              {task.points} pts
-            </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={task.category} type="category" />
@@ -395,7 +404,9 @@ export default function AllTasksPage() {
   const vtAssigneeId = vt?.assignedTo?._id ?? vt?.assignedTo
   const vtMine =
     Boolean(currentUser?.id && vtAssigneeId != null && String(vtAssigneeId) === String(currentUser.id))
-  const canEditSubmission = vtMine && (vt?.status === 'in_progress' || vt?.status === 'submitted')
+  const canEditSubmission =
+    vtMine && (vt?.status === 'in_progress' || vt?.status === 'submitted' || vt?.status === 'rejected')
+  const latestRejectComment = getLatestRejectComment(vt)
   const canStartAssigned = vtMine && vt?.status === 'todo' && !vtPool
   const dialogEditable = taskDetailMode === 'edit'
   const showAssigneeEditPanel = dialogEditable && (canStartAssigned || canEditSubmission)
@@ -455,6 +466,7 @@ export default function AllTasksPage() {
                       <SelectItem value="todo">To do</SelectItem>
                       <SelectItem value="in_progress">In progress</SelectItem>
                       <SelectItem value="submitted">Submitted</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
                       <SelectItem value="completed">Completed</SelectItem>
                     </SelectContent>
                   </Select>
@@ -628,8 +640,18 @@ export default function AllTasksPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <StatusBadge value={vt?.category} type="category" />
+              <StatusBadge value={vt?.priority} type="priority" />
               <StatusBadge value={vt?.status} type="status" />
-              <span className="text-sm font-mono text-primary font-semibold">{vt?.points} pts</span>
+            </div>
+            <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground space-y-1">
+              <p>
+                <span className="font-medium text-foreground/80">Contribution type:</span>{' '}
+                {vt?.contributionType ?? vt?.category ?? '—'}
+              </p>
+              <p>
+                <span className="font-medium text-foreground/80">Points:</span>{' '}
+                <span className="font-semibold text-primary">{vt?.points ?? 0}</span>
+              </p>
             </div>
 
             {taskDetailMode === 'view' && vtMine && (canStartAssigned || canEditSubmission) && (
@@ -668,8 +690,16 @@ export default function AllTasksPage() {
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
                   You can edit proof links and notes while the task is <strong>in progress</strong> or{' '}
-                  <strong>submitted</strong> (waiting for review). Points and task title are set by admins/leads.
+                  <strong>submitted</strong> (waiting for review). If it was rejected, update and submit again.
                 </p>
+                {vt?.status === 'rejected' && (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground/90">
+                    <p className="font-semibold text-destructive">Submission rejected</p>
+                    <p className="mt-1 whitespace-pre-wrap text-foreground/90">
+                      {latestRejectComment || 'No comment was added by the reviewer.'}
+                    </p>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <div className="space-y-1">
                     <Label className="text-xs">GitHub</Label>
@@ -718,7 +748,7 @@ export default function AllTasksPage() {
                   >
                     {submissionSaving ? 'Saving…' : 'Save submission'}
                   </Button>
-                  {vt?.status === 'in_progress' && (
+                  {(vt?.status === 'in_progress' || vt?.status === 'rejected') && (
                     <Button
                       type="button"
                       size="sm"
@@ -727,7 +757,11 @@ export default function AllTasksPage() {
                       onClick={() => void handleSaveSubmission({ alsoSubmit: true })}
                     >
                       <Send className="size-3.5" />
-                      {submissionSaving ? 'Sending…' : 'Save & submit for review'}
+                      {submissionSaving
+                        ? 'Sending…'
+                        : vt?.status === 'rejected'
+                          ? 'Save & resubmit for review'
+                          : 'Save & submit for review'}
                     </Button>
                   )}
                 </div>
