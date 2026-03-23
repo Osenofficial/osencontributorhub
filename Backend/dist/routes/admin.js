@@ -108,6 +108,10 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
         const assigneeId = assignedTo != null && String(assignedTo).trim() !== "" && assignedTo !== "__pool__"
             ? assignedTo
             : null;
+        const assignErr = await assigneeValidationError(assigneeId);
+        if (assignErr) {
+            return res.status(400).json({ message: assignErr });
+        }
         const task = await Task_1.Task.create({
             title,
             description,
@@ -168,6 +172,23 @@ const CREATOR_EDIT_FIELDS = [
 function taskCreatedByUser(task, userId) {
     return String(task.createdBy) === String(userId);
 }
+const ROLES_EXCLUDED_FROM_TASK_ASSIGNMENT = ["accounts", "evangelist"];
+function parseAssigneeIdFromBody(assignedTo) {
+    if (assignedTo == null || String(assignedTo).trim() === "" || assignedTo === "__pool__")
+        return null;
+    return String(assignedTo);
+}
+async function assigneeValidationError(assigneeId) {
+    if (!assigneeId)
+        return null;
+    const u = await User_1.User.findById(assigneeId).select("role");
+    if (!u)
+        return "Assignee not found";
+    if (ROLES_EXCLUDED_FROM_TASK_ASSIGNMENT.includes(String(u.role))) {
+        return "Accounts and evangelist users cannot be assigned tasks";
+    }
+    return null;
+}
 function applyCreatorPayloadToTask(task, body) {
     const { title, description, deadline, category, contributionType, priority, assignedTo, points } = body;
     if (title !== undefined)
@@ -224,6 +245,13 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
             }
             if (!isAdmin && !taskCreatedByUser(task, req.user._id)) {
                 return res.status(403).json({ message: "Only the task creator or an admin can edit task details" });
+            }
+            if (req.body.assignedTo !== undefined) {
+                const nextAssignee = parseAssigneeIdFromBody(req.body.assignedTo);
+                const assignErr = await assigneeValidationError(nextAssignee);
+                if (assignErr) {
+                    return res.status(400).json({ message: assignErr });
+                }
             }
             applyCreatorPayloadToTask(task, req.body);
             task.history.push({
@@ -339,6 +367,10 @@ exports.adminRouter.post("/tasks/:id/approve-assignment", (0, auth_1.requireRole
         const pending = (task.pendingAssignmentRequests || []).some((p) => p.user.toString() === String(userId));
         if (!pending) {
             return res.status(400).json({ message: "No pending request from this user for this task" });
+        }
+        const assignErr = await assigneeValidationError(String(userId));
+        if (assignErr) {
+            return res.status(400).json({ message: assignErr });
         }
         task.assignedTo = userId;
         task.pendingAssignmentRequests = [];
@@ -512,8 +544,16 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
             case "delete_task":
                 await Task_1.Task.findByIdAndDelete(task._id);
                 break;
-            case "edit_task":
-                applyCreatorPayloadToTask(task, (doc.payload || {}));
+            case "edit_task": {
+                const payload = (doc.payload || {});
+                if (payload.assignedTo !== undefined) {
+                    const nextAssignee = parseAssigneeIdFromBody(payload.assignedTo);
+                    const assignErr = await assigneeValidationError(nextAssignee);
+                    if (assignErr) {
+                        return res.status(400).json({ message: assignErr });
+                    }
+                }
+                applyCreatorPayloadToTask(task, payload);
                 task.history.push({
                     actor: adminId,
                     action: "edited",
@@ -524,6 +564,7 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                 });
                 await task.save();
                 break;
+            }
             case "reject_submission": {
                 if (task.status !== "submitted") {
                     return res.status(400).json({ message: "Task is no longer submitted" });
