@@ -8,7 +8,7 @@ export type Role =
   | 'intern'
   | 'accounts'
   | 'evangelist'
-export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'completed'
+export type TaskStatus = 'todo' | 'in_progress' | 'submitted' | 'rejected' | 'completed'
 export type TaskCategory = 'content' | 'development' | 'design' | 'community' | 'research'
 export type Priority = 'low' | 'medium' | 'high' | 'urgent'
 
@@ -107,6 +107,7 @@ export const STATUS_COLORS: Record<TaskStatus, string> = {
   todo: 'text-muted-foreground bg-muted/50 border-border',
   in_progress: 'text-blue-400 bg-blue-400/10 border-blue-400/30',
   submitted: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
+  rejected: 'text-red-400 bg-red-400/10 border-red-400/30',
   completed: 'text-green-400 bg-green-400/10 border-green-400/30',
 }
 
@@ -114,6 +115,7 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   todo: 'To Do',
   in_progress: 'In Progress',
   submitted: 'Submitted',
+  rejected: 'Rejected',
   completed: 'Completed',
 }
 
