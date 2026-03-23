@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
-export type TaskStatus = "todo" | "in_progress" | "submitted" | "completed";
+export type TaskStatus = "todo" | "in_progress" | "submitted" | "rejected" | "completed";
 export type TaskCategory = "content" | "development" | "design" | "community" | "research";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
@@ -52,7 +52,7 @@ const TaskSchema = new Schema<ITask>(
     description: { type: String, trim: true },
     status: {
       type: String,
-      enum: ["todo", "in_progress", "submitted", "completed"],
+      enum: ["todo", "in_progress", "submitted", "rejected", "completed"],
       default: "todo",
       index: true,
     },
@@ -82,8 +82,8 @@ const TaskSchema = new Schema<ITask>(
       {
         actor: { type: Schema.Types.ObjectId, ref: "User", required: true },
         action: { type: String, required: true },
-        fromStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
-        toStatus: { type: String, enum: ["todo", "in_progress", "submitted", "completed"] },
+        fromStatus: { type: String, enum: ["todo", "in_progress", "submitted", "rejected", "completed"] },
+        toStatus: { type: String, enum: ["todo", "in_progress", "submitted", "rejected", "completed"] },
         createdAt: { type: Date, default: Date.now },
         meta: { type: Schema.Types.Mixed },
       },
