@@ -245,6 +245,7 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
             }
             task.status = req.body.status;
         }
+        const rejectComment = typeof req.body.rejectComment === "string" ? req.body.rejectComment.trim().slice(0, 500) : "";
         const statusChanged = fromStatus !== task.status;
         if (statusChanged) {
             task.history.push({
@@ -253,9 +254,11 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 fromStatus,
                 toStatus: task.status,
                 createdAt: new Date(),
-                meta: req.body.points !== undefined && typeof req.body.points === "number"
-                    ? { points: req.body.points }
-                    : undefined,
+                meta: task.status === "rejected" && rejectComment
+                    ? { rejectComment }
+                    : req.body.points !== undefined && typeof req.body.points === "number"
+                        ? { points: req.body.points }
+                        : undefined,
             });
         }
         await task.save();
@@ -266,11 +269,13 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 message: `Your submission for "${task.title}" has been approved!`,
             });
         }
-        if (fromStatus === "submitted" && task.status === "in_progress" && task.assignedTo) {
+        if (fromStatus === "submitted" && (task.status === "rejected" || task.status === "in_progress") && task.assignedTo) {
             await Notification_1.Notification.create({
                 user: task.assignedTo,
                 title: "Submission needs revision",
-                message: `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+                message: rejectComment
+                    ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
+                    : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
             });
         }
         const populated = await Task_1.Task.findById(task._id)
@@ -435,12 +440,21 @@ exports.adminRouter.post("/lead-action-requests", (0, auth_1.requireRole)("lead"
         if (dup) {
             return res.status(400).json({ message: "You already have a pending request of this type for this task" });
         }
+        const normalizedPayload = type === "edit_task"
+            ? payload
+            : type === "reject_submission"
+                ? {
+                    rejectComment: typeof payload?.rejectComment === "string"
+                        ? String(payload?.rejectComment).trim().slice(0, 500)
+                        : undefined,
+                }
+                : undefined;
         const doc = await LeadActionRequest_1.LeadActionRequest.create({
             type,
             task: taskId,
             requestedBy: req.user._id,
             status: "pending",
-            payload: type === "edit_task" ? payload : undefined,
+            payload: normalizedPayload,
         });
         const populated = await LeadActionRequest_1.LeadActionRequest.findById(doc._id)
             .populate("task", "title status")
@@ -515,20 +529,26 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                     return res.status(400).json({ message: "Task is no longer submitted" });
                 }
                 const fromStatus = task.status;
-                task.status = "in_progress";
+                task.status = "rejected";
+                const rejectComment = typeof doc.payload?.rejectComment === "string"
+                    ? String(doc.payload?.rejectComment).trim().slice(0, 500)
+                    : "";
                 task.history.push({
                     actor: adminId,
                     action: "admin_update",
                     fromStatus,
                     toStatus: task.status,
                     createdAt: new Date(),
+                    meta: rejectComment ? { rejectComment, viaLeadApprovalRequest: true } : { viaLeadApprovalRequest: true },
                 });
                 await task.save();
                 if (task.assignedTo) {
                     await Notification_1.Notification.create({
                         user: task.assignedTo,
                         title: "Submission needs revision",
-                        message: `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+                        message: rejectComment
+                            ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
+                            : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
                     });
                 }
                 break;
