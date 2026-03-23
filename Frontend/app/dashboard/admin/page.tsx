@@ -506,6 +506,24 @@ export default function AdminPage() {
     [tasks],
   )
 
+  /** Accounts & evangelist are not eligible for task assignment (dropdown + API). */
+  const ROLES_EXCLUDED_FROM_ASSIGN = useMemo(() => new Set(['accounts', 'evangelist']), [])
+  const membersForAssignDropdown = useMemo(() => {
+    const assignable = members.filter((m) => !ROLES_EXCLUDED_FROM_ASSIGN.has(m.role))
+    if (taskForm?.mode !== 'edit' || !form.assignedTo || form.assignedTo === '__pool__') {
+      return assignable
+    }
+    const cur = members.find((m) => String(m._id) === form.assignedTo)
+    if (
+      cur &&
+      ROLES_EXCLUDED_FROM_ASSIGN.has(cur.role) &&
+      !assignable.some((m) => String(m._id) === form.assignedTo)
+    ) {
+      return [cur, ...assignable]
+    }
+    return assignable
+  }, [members, taskForm, form.assignedTo, ROLES_EXCLUDED_FROM_ASSIGN])
+
   const panelTitle = currentUser.role === 'admin' ? 'Admin Panel' : 'Program'
 
   function renderStandardTaskRow(task: any) {
@@ -1306,7 +1324,10 @@ export default function AdminPage() {
               </div>
               <div className="pl-8 space-y-2">
                 <label className="text-sm font-medium text-foreground">Assign to</label>
-                <p className="text-xs text-muted-foreground">Leave as open pool so anyone can claim, or pick a member.</p>
+                <p className="text-xs text-muted-foreground">
+                  Leave as open pool so anyone can claim, or pick a member. Accounts and evangelist roles are not
+                  listed — they are not assigned program tasks.
+                </p>
                 <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
                   <SelectTrigger className="h-10 bg-background border-border">
                     <SelectValue placeholder="Open pool or member..." />
@@ -1315,7 +1336,7 @@ export default function AdminPage() {
                     <SelectItem value="__pool__" className="py-2">
                       <span className="text-amber-600 dark:text-amber-400">Open pool (unassigned)</span>
                     </SelectItem>
-                    {members.map((m) => (
+                    {membersForAssignDropdown.map((m) => (
                       <SelectItem key={m._id} value={m._id} className="py-2">
                         <div className="flex items-center gap-2">
                           <AvatarCircle
