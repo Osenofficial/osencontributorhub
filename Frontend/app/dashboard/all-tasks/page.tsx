@@ -68,11 +68,16 @@ function userHasPendingAssignment(task: any, userId: string | undefined) {
 
 function getLatestRejectComment(task: any): string {
   const history = Array.isArray(task?.history) ? [...task.history] : []
-  const latestReject = history
-    .sort((a: any, b: any) => new Date(b?.createdAt ?? 0).getTime() - new Date(a?.createdAt ?? 0).getTime())
-    .find((entry: any) => entry?.toStatus === 'rejected')
-  const note = latestReject?.meta?.rejectComment
-  return typeof note === 'string' ? note.trim() : ''
+  const sorted = history.sort(
+    (a: any, b: any) => new Date(b?.createdAt ?? 0).getTime() - new Date(a?.createdAt ?? 0).getTime(),
+  )
+  for (const e of sorted) {
+    if (e?.toStatus === 'rejected' && e?.meta && typeof e.meta.rejectComment === 'string') {
+      const s = e.meta.rejectComment.trim()
+      if (s) return s
+    }
+  }
+  return ''
 }
 
 export default function AllTasksPage() {
@@ -808,7 +813,17 @@ export default function AllTasksPage() {
                 )}
               </div>
             )}
-            <div className="border-t border-border/50 pt-4">
+            {(vt?.status === 'rejected' || getLatestRejectComment(vt)) && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 space-y-1.5">
+                <p className="text-sm font-semibold text-destructive">Reviewer rejection / reversal note</p>
+                <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                  {getLatestRejectComment(vt) ||
+                    'No detailed reason was recorded; check with your lead or admin.'}
+                </p>
+              </div>
+            )}
+            <div className="border-t border-border/50 pt-4 space-y-2">
+              <p className="text-sm font-semibold text-foreground">Task comments</p>
               <TaskComments taskId={vt?._id} />
             </div>
             {vt && vtPool && currentUser?.id && (
