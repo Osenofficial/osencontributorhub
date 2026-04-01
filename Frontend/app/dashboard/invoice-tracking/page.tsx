@@ -1,12 +1,24 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Download, FileSpreadsheet, Mail, RefreshCw, Search } from 'lucide-react'
+import {
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  FileSpreadsheet,
+  Mail,
+  MessageSquareText,
+  RefreshCw,
+  Search,
+  XCircle,
+} from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { InvoiceHubNav } from '@/components/invoice-hub-nav'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -31,6 +43,46 @@ type TrackingInvoice = {
   status: InvoiceStatus
   paidAt?: string
   submittedBy?: { name?: string; email?: string }
+  createdAt: string
+}
+
+/** Full invoice from GET /dashboard/invoices/:id (detail + thread). */
+type InvoiceRecord = {
+  _id: string
+  fullName: string
+  email: string
+  phone: string
+  osenRole: string
+  eventName: string
+  eventDate: string
+  eventPreApproved: boolean
+  roleAtEvent: string
+  totalAmountClaimed: number
+  budgetBreakdown: string
+  billsDriveLink: string
+  paymentMethod: 'upi' | 'bank_transfer'
+  upiId?: string
+  bankAccountHolderName?: string
+  bankAccountNumber?: string
+  bankIfscCode?: string
+  notes?: string
+  status: InvoiceStatus
+  adminReviewNotes?: string
+  accountsReviewNotes?: string
+  adminReviewedBy?: { _id?: string; name?: string; email?: string }
+  accountsReviewedBy?: { _id?: string; name?: string; email?: string }
+  adminReviewedAt?: string
+  accountsReviewedAt?: string
+  paidAt?: string
+  submittedBy?: { _id: string; name: string; email: string; role: string }
+  createdAt: string
+}
+
+type InvoiceComment = {
+  _id?: string
+  author?: { _id?: string; name?: string; email?: string; avatar?: string; role?: string }
+  role: string
+  body: string
   createdAt: string
 }
 
@@ -99,6 +151,8 @@ function exportInvoiceRow(inv: TrackingInvoice) {
 
 export default function InvoiceTrackingPage() {
   const { currentUser } = useApp()
+  const currentUserId = currentUser?.id
+  const role = currentUser?.role
   const [status, setStatus] = useState<string>('all')
   const [name, setName] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -107,9 +161,23 @@ export default function InvoiceTrackingPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailInvoice, setDetailInvoice] = useState<InvoiceRecord | null>(null)
+  const [detailLoadError, setDetailLoadError] = useState<string | null>(null)
+  const [commentsError, setCommentsError] = useState<string | null>(null)
+  const [invoiceComments, setInvoiceComments] = useState<InvoiceComment[]>([])
+  const [newCommentBody, setNewCommentBody] = useState('')
+  const [savingComment, setSavingComment] = useState(false)
+  const [decision, setDecision] = useState<'approved' | 'rejected' | 'paid' | null>(null)
+  const [reviewNotes, setReviewNotes] = useState('')
+  const [savingDecision, setSavingDecision] = useState(false)
+
   const canAccess = Boolean(currentUser)
   const isFullListRole = currentUser?.role === 'admin' || currentUser?.role === 'accounts'
   const canUseMail = isFullListRole
+  const isAdmin = role === 'admin'
+  const isAccounts = role === 'accounts'
 
   async function load(
     override?: Partial<{ name: string; dateFrom: string; dateTo: string; status: string }>,
@@ -161,6 +229,122 @@ export default function InvoiceTrackingPage() {
   }
 
   const defaultFilters = !name.trim() && !dateFrom && !dateTo && status === 'all'
+
+  function closeDetail() {
+    setDetailId(null)
+    setDetailInvoice(null)
+    setDetailLoadError(null)
+    setCommentsError(null)
+    setInvoiceComments([])
+    setNewCommentBody('')
+    setDecision(null)
+    setReviewNotes('')
+  }
+
+  async function openDetail(id: string) {
+    setDetailId(id)
+    setDetailLoading(true)
+    setDetailLoadError(null)
+    setCommentsError(null)
+    setDetailInvoice(null)
+    setInvoiceComments([])
+    setNewCommentBody('')
+    setDecision(null)
+    setReviewNotes('')
+    try {
+      const inv = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${id}`)
+      setDetailInvoice(inv)
+      try {
+        const list = await apiFetch<InvoiceComment[]>(`/dashboard/invoices/${id}/comments`)
+        setInvoiceComments(list ?? [])
+      } catch {
+        setCommentsError('Could not load the discussion thread.')
+        setInvoiceComments([])
+      }
+    } catch (e: unknown) {
+      setDetailLoadError(e instanceof Error ? e.message : 'Failed to load invoice')
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  async function refreshThreadComments(invoiceId?: string) {
+    const id = invoiceId ?? detailInvoice?._id
+    if (!id) return
+    setCommentsError(null)
+    try {
+      const list = await apiFetch<InvoiceComment[]>(`/dashboard/invoices/${id}/comments`)
+      setInvoiceComments(list ?? [])
+    } catch {
+      setCommentsError('Could not load the discussion thread.')
+      setInvoiceComments([])
+    }
+  }
+
+  function canPostComment() {
+    if (!detailInvoice || !currentUserId) return false
+    if (isAdmin) return true
+    if (isAccounts) return true
+    const sid = detailInvoice.submittedBy?._id
+    return Boolean(sid && String(sid) === String(currentUserId))
+  }
+
+  async function handleAddComment() {
+    if (!detailInvoice) return
+    if (!canPostComment()) return
+    const trimmed = newCommentBody.trim()
+    if (!trimmed) return
+    setSavingComment(true)
+    try {
+      await apiFetch(`/dashboard/invoices/${detailInvoice._id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ body: trimmed }),
+      })
+      setNewCommentBody('')
+      await refreshThreadComments()
+    } finally {
+      setSavingComment(false)
+    }
+  }
+
+  async function confirmDecision() {
+    if (!detailInvoice || !decision || !role) return
+    if (role === 'admin') {
+      if (!['approved', 'rejected'].includes(decision)) return
+      setSavingDecision(true)
+      try {
+        const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+        })
+        setDetailInvoice(updated)
+        setDecision(null)
+        setReviewNotes('')
+        await refreshThreadComments(updated._id)
+        void load()
+      } finally {
+        setSavingDecision(false)
+      }
+      return
+    }
+    if (role === 'accounts') {
+      if (!['paid', 'rejected'].includes(decision)) return
+      setSavingDecision(true)
+      try {
+        const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+        })
+        setDetailInvoice(updated)
+        setDecision(null)
+        setReviewNotes('')
+        await refreshThreadComments(updated._id)
+        void load()
+      } finally {
+        setSavingDecision(false)
+      }
+    }
+  }
 
   if (!canAccess) {
     return (
@@ -302,8 +486,14 @@ export default function InvoiceTrackingPage() {
                     const mail = inv.submittedBy?.email || inv.email
                     return (
                       <tr key={inv._id} className="hover:bg-muted/30">
-                        <td className="max-w-[10rem] px-3 py-3 font-medium sm:max-w-none sm:px-4">
-                          {inv.eventName}
+                        <td className="max-w-[10rem] px-3 py-3 sm:max-w-none sm:px-4">
+                          <button
+                            type="button"
+                            className="max-w-full truncate text-left font-medium text-primary hover:underline decoration-primary/50"
+                            onClick={() => void openDetail(inv._id)}
+                          >
+                            {inv.eventName}
+                          </button>
                         </td>
                         <td className="px-3 py-3 text-muted-foreground sm:px-4">
                           <div>{inv.submittedBy?.name || inv.fullName}</div>
@@ -331,6 +521,17 @@ export default function InvoiceTrackingPage() {
                         </td>
                         <td className="px-3 py-3 text-right sm:px-4">
                           <div className="flex justify-end gap-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1 px-2"
+                              title="Details, rejection notes, and full discussion"
+                              onClick={() => void openDetail(inv._id)}
+                            >
+                              <MessageSquareText className="size-3.5" />
+                              <span className="hidden sm:inline">View</span>
+                            </Button>
                             {canUseMail && (
                               <Button
                                 type="button"
@@ -366,6 +567,294 @@ export default function InvoiceTrackingPage() {
             </div>
           )}
         </div>
+
+        <Dialog open={detailId !== null} onOpenChange={(o) => !o && closeDetail()}>
+          <DialogContent
+            className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden p-0"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
+            {detailLoading && !detailInvoice && !detailLoadError ? (
+              <div className="px-6 py-12 text-center text-sm text-muted-foreground">Loading invoice…</div>
+            ) : detailLoadError && !detailInvoice ? (
+              <div className="space-y-4 px-6 py-6">
+                <p className="text-sm text-destructive">{detailLoadError}</p>
+                <Button variant="outline" size="sm" onClick={closeDetail}>
+                  Close
+                </Button>
+              </div>
+            ) : detailInvoice ? (
+              <>
+                <div className="border-b border-border/50 px-6 pb-3 pt-6">
+                  <DialogHeader>
+                    <DialogTitle className="text-base">{detailInvoice.eventName}</DialogTitle>
+                  </DialogHeader>
+                </div>
+
+                <div className="border-b border-border/50 px-6 py-4">
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-muted-foreground">Submitter</span>
+                    <span className="min-w-0 truncate">{detailInvoice.fullName}</span>
+                    <span className="text-muted-foreground">Email</span>
+                    <span className="min-w-0 truncate">{detailInvoice.email}</span>
+                    <span className="text-muted-foreground">Admin approved by</span>
+                    <span className="min-w-0 truncate">
+                      {detailInvoice.adminReviewedBy?.name || detailInvoice.adminReviewedBy?.email || '—'}
+                    </span>
+                    <span className="text-muted-foreground">Accounts approved by</span>
+                    <span className="min-w-0 truncate">
+                      {detailInvoice.accountsReviewedBy?.name || detailInvoice.accountsReviewedBy?.email || '—'}
+                    </span>
+                    <span className="text-muted-foreground">Event date</span>
+                    <span>{new Date(detailInvoice.eventDate).toLocaleDateString('en-IN')}</span>
+                    <span className="text-muted-foreground">Amount</span>
+                    <span className="font-semibold">₹{detailInvoice.totalAmountClaimed}</span>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+                  <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-4">
+                    <div className="text-sm font-semibold">Payment details (for payout)</div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <span className="text-muted-foreground">Method</span>
+                      <span className="font-medium">
+                        {detailInvoice.paymentMethod === 'upi' ? 'UPI' : 'Bank Transfer'}
+                      </span>
+                      {detailInvoice.paymentMethod === 'upi' ? (
+                        <>
+                          <span className="text-muted-foreground">UPI ID</span>
+                          <span className="break-all font-mono text-primary">{detailInvoice.upiId || '—'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground">Account holder</span>
+                          <span>{detailInvoice.bankAccountHolderName || '—'}</span>
+                          <span className="text-muted-foreground">Account number</span>
+                          <span className="font-mono">{detailInvoice.bankAccountNumber || '—'}</span>
+                          <span className="text-muted-foreground">IFSC</span>
+                          <span className="font-mono">{detailInvoice.bankIfscCode || '—'}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-sm font-semibold">Bills link</div>
+                    <a
+                      href={detailInvoice.billsDriveLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 break-all text-primary hover:underline"
+                    >
+                      {detailInvoice.billsDriveLink.slice(0, 60)}… <ExternalLink className="size-3" />
+                    </a>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">Budget breakdown</div>
+                    <div className="whitespace-pre-wrap text-muted-foreground">{detailInvoice.budgetBreakdown}</div>
+                  </div>
+
+                  {detailInvoice.notes && (
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold">Notes</div>
+                      <div className="whitespace-pre-wrap text-muted-foreground">{detailInvoice.notes}</div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3 border-t border-border/50 pt-2">
+                    <div className="text-sm font-semibold">Reviewer decisions and reasons</div>
+                    {detailInvoice.status === 'rejected' && (
+                      <div className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+                        <p className="text-sm font-semibold text-destructive">
+                          Rejection reasons (shown above comments)
+                        </p>
+                        {detailInvoice.adminReviewNotes && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">Admin</p>
+                            <p className="whitespace-pre-wrap text-sm text-foreground">
+                              {detailInvoice.adminReviewNotes}
+                            </p>
+                          </div>
+                        )}
+                        {detailInvoice.accountsReviewNotes && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">Accounts</p>
+                            <p className="whitespace-pre-wrap text-sm text-foreground">
+                              {detailInvoice.accountsReviewNotes}
+                            </p>
+                          </div>
+                        )}
+                        {!detailInvoice.adminReviewNotes && !detailInvoice.accountsReviewNotes && (
+                          <p className="text-sm text-muted-foreground">No written rejection notes on file.</p>
+                        )}
+                      </div>
+                    )}
+
+                    {detailInvoice.status !== 'rejected' &&
+                      (detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes) && (
+                        <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4">
+                          {detailInvoice.adminReviewNotes && (
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-muted-foreground">Admin review notes</p>
+                              <p className="whitespace-pre-wrap text-sm text-foreground">
+                                {detailInvoice.adminReviewNotes}
+                              </p>
+                            </div>
+                          )}
+                          {detailInvoice.accountsReviewNotes && (
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-muted-foreground">Accounts review notes</p>
+                              <p className="whitespace-pre-wrap text-sm text-foreground">
+                                {detailInvoice.accountsReviewNotes}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                  </div>
+
+                  <div className="space-y-2 border-t border-border/50 pt-2">
+                    <div className="text-sm font-semibold">Discussion (all comments)</div>
+                    <p className="text-xs text-muted-foreground">
+                      Admin, accounts, and the submitter can post at any stage, including after paid or rejected.
+                    </p>
+                    {commentsError && <p className="text-xs text-destructive">{commentsError}</p>}
+                    {invoiceComments.length === 0 && !commentsError ? (
+                      <p className="text-sm text-muted-foreground">No thread comments yet.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {invoiceComments.map((c, idx) => {
+                          const name = c.author?.name || c.author?.email || 'Reviewer'
+                          const time = c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN') : ''
+                          return (
+                            <div
+                              key={c._id ? String(c._id) : `${detailInvoice._id}-c-${idx}`}
+                              className="rounded-lg border border-border bg-card p-3 shadow-sm"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="truncate text-xs font-medium text-muted-foreground">
+                                  {name}
+                                  {c.role ? (
+                                    <span className="ml-1 text-[10px] uppercase opacity-70">({c.role})</span>
+                                  ) : null}
+                                </div>
+                                <div className="shrink-0 text-[10px] text-muted-foreground">{time}</div>
+                              </div>
+                              <div className="mt-2 whitespace-pre-wrap text-sm text-foreground">{c.body}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {canPostComment() && (
+                      <div className="space-y-2 pt-2">
+                        <Textarea
+                          placeholder="Add a comment on this reimbursement…"
+                          value={newCommentBody}
+                          onChange={(e) => setNewCommentBody(e.target.value)}
+                          className="min-h-20 bg-background"
+                        />
+                        <div className="flex items-center justify-end">
+                          <Button onClick={() => void handleAddComment()} disabled={savingComment} className="gap-2">
+                            {savingComment ? 'Adding…' : 'Add comment'}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {isAdmin && detailInvoice.status === 'pending_admin' && (
+                    <div className="space-y-3 border-t border-border/50 pt-3">
+                      <div className="space-y-2">
+                        <div className="text-sm font-semibold">Admin decision</div>
+                        <Textarea
+                          placeholder="Optional admin notes"
+                          value={reviewNotes}
+                          onChange={(e) => setReviewNotes(e.target.value)}
+                          className="min-h-20"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          className="border-green-500/30 bg-green-500/10 text-green-600"
+                          onClick={() => setDecision('approved')}
+                        >
+                          <CheckCircle2 className="mr-1 size-4" /> Approve
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-red-500/30 bg-red-500/10 text-red-600"
+                          onClick={() => setDecision('rejected')}
+                        >
+                          <XCircle className="mr-1 size-4" /> Reject
+                        </Button>
+                      </div>
+                      {decision && (
+                        <DialogFooter>
+                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
+                            Cancel
+                          </Button>
+                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
+                            Confirm
+                          </Button>
+                        </DialogFooter>
+                      )}
+                    </div>
+                  )}
+
+                  {isAccounts && detailInvoice.status === 'pending_accounts' && (
+                    <div className="space-y-3 border-t border-border/50 pt-3">
+                      <div className="space-y-2">
+                        <div className="text-sm font-semibold">Accounts decision</div>
+                        <Textarea
+                          placeholder="Optional accounts notes"
+                          value={reviewNotes}
+                          onChange={(e) => setReviewNotes(e.target.value)}
+                          className="min-h-20"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          className="border-green-500/30 bg-green-500/10 text-green-600"
+                          onClick={() => setDecision('paid')}
+                        >
+                          <CheckCircle2 className="mr-1 size-4" /> Approve & Pay
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-red-500/30 bg-red-500/10 text-red-600"
+                          onClick={() => setDecision('rejected')}
+                        >
+                          <XCircle className="mr-1 size-4" /> Reject
+                        </Button>
+                      </div>
+                      {decision && (
+                        <DialogFooter>
+                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
+                            Cancel
+                          </Button>
+                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
+                            Confirm
+                          </Button>
+                        </DialogFooter>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end border-t border-border/50 bg-muted/10 px-6 py-3">
+                  <Button variant="ghost" size="sm" onClick={closeDetail}>
+                    Close
+                  </Button>
+                </div>
+              </>
+            ) : null}
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )
