@@ -306,7 +306,22 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
             "Leads can only approve or reject submissions on tasks they created. Submit an approval request for this task.",
         });
       }
-      task.status = req.body.status;
+      const nextStatus = req.body.status as (typeof task)["status"];
+      if (fromStatus === "completed") {
+        if (nextStatus === "rejected") {
+          if (!isAdmin) {
+            return res.status(403).json({
+              message: "Only an admin can undo a mistaken approval by marking the task as rejected.",
+            });
+          }
+        } else if (nextStatus !== fromStatus) {
+          return res.status(400).json({
+            message:
+              "Completed tasks cannot change status except an admin may reject to undo a mistaken approval.",
+          });
+        }
+      }
+      task.status = nextStatus;
     }
     const rejectComment =
       typeof req.body.rejectComment === "string" ? req.body.rejectComment.trim().slice(0, 500) : "";
@@ -346,6 +361,16 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
         message: rejectComment
           ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
           : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+      });
+    }
+
+    if (fromStatus === "completed" && task.status === "rejected" && task.assignedTo) {
+      await Notification.create({
+        user: task.assignedTo,
+        title: "Task approval reversed",
+        message: rejectComment
+          ? `Your completed task "${task.title}" was marked rejected by an admin (approval reversed). Reason: "${rejectComment}". Contact your lead if this is unexpected.`
+          : `Your completed task "${task.title}" was marked rejected by an admin to reverse a mistaken approval. Contact your lead if this is unexpected.`,
       });
     }
 
