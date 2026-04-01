@@ -146,6 +146,7 @@ export default function InvoicesPage() {
   const pendingAdmin = invoices.filter((i) => i.status === 'pending_admin')
   const pendingAccounts = invoices.filter((i) => i.status === 'pending_accounts')
   const paidInvoices = invoices.filter((i) => i.status === 'paid')
+  const rejectedInvoices = invoices.filter((i) => i.status === 'rejected')
 
   async function refresh() {
     const list = await apiFetch<InvoiceRecord[]>('/dashboard/invoices')
@@ -230,10 +231,11 @@ export default function InvoicesPage() {
   }
 
   function canPostComment() {
-    if (!detailInvoice) return false
-    if (isAdmin && detailInvoice.status === 'pending_admin') return true
-    if (isAccounts && detailInvoice.status === 'pending_accounts') return true
-    return false
+    if (!detailInvoice || !currentUser?.id) return false
+    if (isAdmin) return true
+    if (isAccounts) return true
+    const sid = detailInvoice.submittedBy?._id
+    return Boolean(sid && String(sid) === String(currentUser.id))
   }
 
   async function handleAddComment() {
@@ -260,13 +262,14 @@ export default function InvoicesPage() {
       if (!['approved', 'rejected'].includes(decision)) return
       setSavingDecision(true)
       try {
-        await apiFetch(`/dashboard/invoices/${detailInvoice._id}`, {
+        const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
           method: 'PATCH',
           body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
         })
-        setDetailInvoice(null)
+        setDetailInvoice(updated)
         setDecision(null)
         setReviewNotes('')
+        await refreshComments(updated._id)
         await refresh()
       } finally {
         setSavingDecision(false)
@@ -277,13 +280,14 @@ export default function InvoicesPage() {
       if (!['paid', 'rejected'].includes(decision)) return
       setSavingDecision(true)
       try {
-        await apiFetch(`/dashboard/invoices/${detailInvoice._id}`, {
+        const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
           method: 'PATCH',
           body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
         })
-        setDetailInvoice(null)
+        setDetailInvoice(updated)
         setDecision(null)
         setReviewNotes('')
+        await refreshComments(updated._id)
         await refresh()
       } finally {
         setSavingDecision(false)
@@ -657,6 +661,31 @@ export default function InvoicesPage() {
                   ))
                 )}
 
+                {isAccounts && rejectedInvoices.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-border/60">
+                    <div className="text-sm font-semibold text-muted-foreground">Rejected (view thread)</div>
+                    {rejectedInvoices.map((inv) => (
+                      <div
+                        key={inv._id}
+                        className="glass rounded-lg border border-border/40 p-3 flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{inv.eventName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inv.fullName} · ₹{inv.totalAmountClaimed}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <StatusBadge status={inv.status} />
+                          <Button size="sm" variant="outline" onClick={() => openDetail(inv)}>
+                            View
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {isAccounts && paidInvoices.length > 0 && (
                   <div className="space-y-2 pt-2 border-t border-border/60">
                     <div className="text-sm font-semibold text-muted-foreground">Paid invoices</div>
@@ -671,7 +700,12 @@ export default function InvoicesPage() {
                             {inv.fullName} · ₹{inv.totalAmountClaimed}
                           </p>
                         </div>
-                        <StatusBadge status={inv.status} />
+                        <div className="flex items-center gap-2 shrink-0">
+                          <StatusBadge status={inv.status} />
+                          <Button size="sm" variant="outline" onClick={() => openDetail(inv)}>
+                            View
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -768,31 +802,76 @@ export default function InvoicesPage() {
                   </div>
                 )}
 
-                {(detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes) && (
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold">Review notes</div>
-                    <div className="text-muted-foreground whitespace-pre-wrap">
-                      {detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes}
+                <div className="space-y-3 pt-2 border-t border-border/50">
+                  <div className="text-sm font-semibold">Reviewer decisions and reasons</div>
+                  {detailInvoice.status === 'rejected' && (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 space-y-3">
+                      <p className="text-sm font-semibold text-destructive">Rejection reasons (shown above comments)</p>
+                      {detailInvoice.adminReviewNotes && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">Admin</p>
+                          <p className="text-sm text-foreground whitespace-pre-wrap">{detailInvoice.adminReviewNotes}</p>
+                        </div>
+                      )}
+                      {detailInvoice.accountsReviewNotes && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">Accounts</p>
+                          <p className="text-sm text-foreground whitespace-pre-wrap">{detailInvoice.accountsReviewNotes}</p>
+                        </div>
+                      )}
+                      {!detailInvoice.adminReviewNotes && !detailInvoice.accountsReviewNotes && (
+                        <p className="text-sm text-muted-foreground">No written rejection notes on file.</p>
+                      )}
                     </div>
-                  </div>
-                )}
+                  )}
+
+                  {detailInvoice.status !== 'rejected' &&
+                    (detailInvoice.adminReviewNotes || detailInvoice.accountsReviewNotes) && (
+                      <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                        {detailInvoice.adminReviewNotes && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">Admin review notes</p>
+                            <p className="text-sm text-foreground whitespace-pre-wrap">{detailInvoice.adminReviewNotes}</p>
+                          </div>
+                        )}
+                        {detailInvoice.accountsReviewNotes && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">Accounts review notes</p>
+                            <p className="text-sm text-foreground whitespace-pre-wrap">{detailInvoice.accountsReviewNotes}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                </div>
 
                 <div className="space-y-2 pt-2 border-t border-border/50">
-                  <div className="text-sm font-semibold">Review comments</div>
+                  <div className="text-sm font-semibold">Review thread (all comments)</div>
+                  <p className="text-xs text-muted-foreground">
+                    Admin, accounts, and the submitter can add notes here at any stage, including after paid or
+                    rejected.
+                  </p>
                   {invoiceComments.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No comments yet.</p>
+                    <p className="text-sm text-muted-foreground">No thread comments yet.</p>
                   ) : (
                     <div className="space-y-3">
                       {invoiceComments.map((c, idx) => {
                         const name = c.author?.name || c.author?.email || 'Reviewer'
                         const time = c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN') : ''
                         return (
-                          <div key={c._id || `${detailInvoice._id}-${idx}`} className="glass rounded-lg border border-border/40 p-3">
+                          <div
+                            key={c._id ? String(c._id) : `${detailInvoice._id}-c-${idx}`}
+                            className="rounded-lg border border-border bg-card p-3 shadow-sm"
+                          >
                             <div className="flex items-center justify-between gap-3">
-                              <div className="text-xs text-muted-foreground font-medium truncate">{name}</div>
+                              <div className="text-xs text-muted-foreground font-medium truncate">
+                                {name}
+                                {c.role ? (
+                                  <span className="ml-1 text-[10px] uppercase opacity-70">({c.role})</span>
+                                ) : null}
+                              </div>
                               <div className="text-[10px] text-muted-foreground shrink-0">{time}</div>
                             </div>
-                            <div className="text-sm whitespace-pre-wrap mt-2">{c.body}</div>
+                            <div className="text-sm whitespace-pre-wrap mt-2 text-foreground">{c.body}</div>
                           </div>
                         )
                       })}
@@ -802,10 +881,10 @@ export default function InvoicesPage() {
                   {canPostComment() && (
                     <div className="space-y-2 pt-2">
                       <Textarea
-                        placeholder="Add a comment (visible to the other reviewer)"
+                        placeholder="Add a comment on this reimbursement…"
                         value={newCommentBody}
                         onChange={(e) => setNewCommentBody(e.target.value)}
-                        className="min-h-20"
+                        className="min-h-20 bg-background"
                       />
                       <div className="flex items-center justify-end">
                         <Button onClick={handleAddComment} disabled={savingComment} className="gap-2">
