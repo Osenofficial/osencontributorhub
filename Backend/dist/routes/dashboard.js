@@ -641,7 +641,7 @@ function canViewInvoiceStage(role, invoice) {
     if (role === "admin")
         return true;
     if (role === "accounts")
-        return ["pending_accounts", "paid"].includes(invoice.status);
+        return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(invoice.status);
     // Evangelist sees only own invoices
     return false;
 }
@@ -649,16 +649,12 @@ function canViewInvoiceComments(userRole, invoice, userId) {
     if (userRole === "admin")
         return true;
     if (userRole === "accounts")
-        return ["pending_accounts", "paid", "rejected"].includes(invoice.status);
+        return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(invoice.status);
     const ownerId = invoice.submittedBy?._id?.toString?.() ?? invoice.submittedBy?.toString?.();
     return !!(ownerId && userId && ownerId === userId);
 }
-function canPostInvoiceComment(userRole, invoice) {
-    if (userRole === "admin")
-        return invoice.status === "pending_admin";
-    if (userRole === "accounts")
-        return invoice.status === "pending_accounts";
-    return false;
+function canPostInvoiceComment(userRole, invoice, userId) {
+    return canViewInvoiceComments(userRole, invoice, userId);
 }
 exports.dashboardRouter.post("/invoices", async (req, res, next) => {
     try {
@@ -720,7 +716,7 @@ exports.dashboardRouter.get("/invoices", async (req, res, next) => {
             return res.json(invoices);
         }
         if (role === "accounts") {
-            const invoices = await Invoice_1.Invoice.find({ status: { $in: ["pending_accounts", "paid"] } })
+            const invoices = await Invoice_1.Invoice.find({ status: { $in: ["pending_accounts", "paid", "rejected"] } })
                 .populate("submittedBy", "name email role")
                 .populate("adminReviewedBy", "name email role")
                 .populate("accountsReviewedBy", "name email role")
@@ -988,7 +984,13 @@ exports.dashboardRouter.patch("/invoices/:id", async (req, res, next) => {
 // ----- Invoice review comments -----
 exports.dashboardRouter.get("/invoices/:id/comments", async (req, res, next) => {
     try {
-        const invoice = await Invoice_1.Invoice.findById(req.params.id).populate("comments.author", "name email avatar role");
+        const invoice = await Invoice_1.Invoice.findById(req.params.id)
+            .populate("submittedBy", "_id")
+            .populate({
+            path: "comments.author",
+            select: "name email avatar role",
+            model: "User",
+        });
         if (!invoice) {
             return res.status(404).json({ message: "Invoice not found" });
         }
@@ -997,7 +999,15 @@ exports.dashboardRouter.get("/invoices/:id/comments", async (req, res, next) => 
         if (!allowed) {
             return res.status(403).json({ message: "You do not have access to this invoice comments" });
         }
-        res.json(invoice.comments || []);
+        const raw = invoice.comments;
+        const list = Array.isArray(raw) ? raw : [];
+        res.json(list.map((c) => ({
+            _id: c._id,
+            author: c.author,
+            role: c.role,
+            body: c.body,
+            createdAt: c.createdAt,
+        })));
     }
     catch (err) {
         next(err);
@@ -1009,9 +1019,10 @@ exports.dashboardRouter.post("/invoices/:id/comments", async (req, res, next) =>
         if (!invoice) {
             return res.status(404).json({ message: "Invoice not found" });
         }
-        const canPost = canPostInvoiceComment(req.user.role, invoice);
+        const userId = req.user?._id?.toString?.() ?? null;
+        const canPost = canPostInvoiceComment(req.user.role, invoice, userId);
         if (!canPost) {
-            return res.status(403).json({ message: "You do not have permission to comment at this stage" });
+            return res.status(403).json({ message: "You do not have permission to comment on this invoice" });
         }
         const { body } = req.body;
         if (!body || typeof body !== "string" || !body.trim()) {
