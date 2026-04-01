@@ -121,6 +121,21 @@ function taskToFormState(task: any): FormState {
   }
 }
 
+/** Latest reviewer rejection note from task history (submission reject or undo-approval). */
+function getLatestTaskRejectComment(task: any): string {
+  const history = Array.isArray(task?.history) ? [...task.history] : []
+  const sorted = history.sort(
+    (a: any, b: any) => new Date(b?.createdAt ?? 0).getTime() - new Date(a?.createdAt ?? 0).getTime(),
+  )
+  for (const e of sorted) {
+    if (e?.toStatus === 'rejected' && e?.meta && typeof e.meta.rejectComment === 'string') {
+      const s = e.meta.rejectComment.trim()
+      if (s) return s
+    }
+  }
+  return ''
+}
+
 function pointsWithUrgentBonus(basePoints: number, priority: Priority): number {
   const b = Math.min(100, Math.max(1, Math.round(basePoints)))
   return priority === 'urgent' ? Math.min(100, b + URGENT_TASK_BONUS_POINTS) : b
@@ -146,6 +161,8 @@ type AdminConfirm =
   | null
   | { kind: 'approve_submission'; taskId: string; title: string }
   | { kind: 'reject_submission'; taskId: string; title: string }
+  /** Admin only: completed task was approved by mistake — mark rejected again. */
+  | { kind: 'undo_complete_task'; taskId: string; title: string }
   | { kind: 'delete_task'; taskId: string; title: string }
   | {
       kind: 'approve_assignment'
@@ -178,6 +195,13 @@ function adminConfirmMeta(c: NonNullable<AdminConfirm>, userRole?: string) {
         title: 'Reject this submission?',
         description: `Mark "${c.title}" as rejected so the contributor can revise and resubmit. They will be notified.`,
         actionLabel: 'Yes, reject',
+        destructive: true,
+      }
+    case 'undo_complete_task':
+      return {
+        title: 'Undo mistaken approval?',
+        description: `Mark "${c.title}" as rejected to reverse a completed approval. Use only if the task was approved by mistake. The assignee will be notified.`,
+        actionLabel: 'Yes, mark rejected',
         destructive: true,
       }
     case 'delete_task':
@@ -402,20 +426,51 @@ export default function AdminPage() {
       apiFetch<Task>(`/admin/tasks/${taskId}`, {
         method: 'PATCH',
         body: JSON.stringify({ status: 'rejected', rejectComment }),
-      }).catch(() => {})
-      setTasks((prev) =>
-        prev.map((task) => {
-          const tid = (task as any)._id ?? task.id
-          return tid === taskId ? { ...task, status: 'rejected' } : task
-        }),
-      )
+      })
+        .then((task) => {
+          setTasks((prev) =>
+            prev.map((x) => {
+              const tid = (x as any)._id ?? x.id
+              return tid === taskId ? { ...x, ...task } : x
+            }),
+          )
+          setViewTask((vt) => {
+            if (!vt) return vt
+            const vid = (vt as any)._id ?? vt.id
+            return String(vid) === taskId ? ({ ...vt, ...(task as any) } as Task) : vt
+          })
+        })
+        .catch(() => {})
     } else {
       apiFetch('/admin/lead-action-requests', {
         method: 'POST',
         body: JSON.stringify({ type: 'reject_submission', taskId, payload: { rejectComment } }),
       }).catch(() => {})
+      setViewTask(null)
     }
-    setViewTask(null)
+  }
+
+  function handleUndoApprovedTask(taskId: string, note?: string) {
+    const rejectComment = note?.trim()
+    if (!currentUser || currentUser.role !== 'admin') return
+    apiFetch<Task>(`/admin/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'rejected', rejectComment }),
+    })
+      .then((task) => {
+        setTasks((prev) =>
+          prev.map((x) => {
+            const tid = (x as any)._id ?? x.id
+            return tid === taskId ? { ...x, ...task } : x
+          }),
+        )
+        setViewTask((vt) => {
+          if (!vt) return vt
+          const vid = (vt as any)._id ?? vt.id
+          return String(vid) === taskId ? ({ ...vt, ...(task as any) } as Task) : vt
+        })
+      })
+      .catch(() => {})
   }
 
   function handleDelete(taskId: string) {
@@ -465,6 +520,9 @@ export default function AdminPage() {
         break
       case 'reject_submission':
         handleRejectSubmission(c.taskId, rejectNote)
+        break
+      case 'undo_complete_task':
+        handleUndoApprovedTask(c.taskId, rejectNote)
         break
       case 'delete_task':
         handleDelete(c.taskId)
@@ -1525,7 +1583,20 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
+              {(viewTask.status === 'rejected' || getLatestTaskRejectComment(viewTask)) && (
+                <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 space-y-1.5">
+                  <h4 className="text-sm font-semibold text-destructive">Rejection / reversal note</h4>
+                  <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                    {getLatestTaskRejectComment(viewTask) ||
+                      'No detailed reason was recorded; check history or ask the reviewer.'}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Shown above task comments for the assignee and reviewers.
+                  </p>
+                </div>
+              )}
               <div className="rounded-xl border border-border bg-secondary p-4">
+                <h4 className="text-sm font-semibold text-foreground mb-3">Task comments</h4>
                 <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} />
               </div>
             </div>
@@ -1561,6 +1632,21 @@ export default function AdminPage() {
                       <CheckCircle2 className="size-3.5" /> Approve
                     </Button>
                   </>
+                )}
+                {viewTask.status === 'completed' && currentUser.role === 'admin' && (
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      setConfirm({
+                        kind: 'undo_complete_task',
+                        taskId: String((viewTask as any)._id ?? viewTask.id),
+                        title: viewTask.title ?? 'this task',
+                      })
+                    }
+                    className="border-destructive/50 text-destructive hover:bg-destructive/10 gap-1.5"
+                  >
+                    <XCircle className="size-3.5" /> Undo approval (reject)
+                  </Button>
                 )}
                 {(currentUser.role === 'admin' || currentUser.role === 'lead') && (
                   <Button
@@ -1603,10 +1689,11 @@ export default function AdminPage() {
         <AlertDialogContent
           className={cn(
             'gap-0 overflow-hidden border-2 border-border bg-card p-0 text-card-foreground shadow-2xl shadow-black/40 sm:max-w-lg',
-            confirm?.kind === 'reject_submission' && 'sm:max-w-[26rem]',
+            (confirm?.kind === 'reject_submission' || confirm?.kind === 'undo_complete_task') &&
+              'sm:max-w-[26rem]',
           )}
         >
-          {confirm?.kind === 'reject_submission' ? (
+          {confirm?.kind === 'reject_submission' || confirm?.kind === 'undo_complete_task' ? (
             <>
               <div className="flex gap-4 border-b border-border bg-muted/80 px-5 py-4">
                 <div
@@ -1617,11 +1704,23 @@ export default function AdminPage() {
                 </div>
                 <div className="min-w-0 flex-1 space-y-1.5 text-left">
                   <AlertDialogTitle className="text-left text-lg font-semibold tracking-tight text-foreground">
-                    Reject this submission?
+                    {confirm.kind === 'undo_complete_task'
+                      ? 'Undo mistaken approval?'
+                      : 'Reject this submission?'}
                   </AlertDialogTitle>
                   <AlertDialogDescription className="text-left text-sm leading-relaxed text-muted-foreground">
-                    The task will be marked <strong className="text-foreground">Rejected</strong>. The assignee can
-                    revise and resubmit. They&apos;ll get a notification with your note (if you add one).
+                    {confirm.kind === 'undo_complete_task' ? (
+                      <>
+                        This task is currently <strong className="text-foreground">completed</strong>. Marking it{' '}
+                        <strong className="text-foreground">Rejected</strong> reverses that approval (admin only). The
+                        assignee is notified — explain why below.
+                      </>
+                    ) : (
+                      <>
+                        The task will be marked <strong className="text-foreground">Rejected</strong>. The assignee can
+                        revise and resubmit. They&apos;ll get a notification with your note (if you add one).
+                      </>
+                    )}
                   </AlertDialogDescription>
                 </div>
               </div>
@@ -1632,11 +1731,17 @@ export default function AdminPage() {
                     <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
                   </Label>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Be specific — e.g. what to fix, missing links, or quality bar. Shown in their task view.
+                    {confirm.kind === 'undo_complete_task'
+                      ? 'Explain the reversal (e.g. approved by mistake, needs rework). Shown at the top of their task thread.'
+                      : 'Be specific — e.g. what to fix, missing links, or quality bar. Shown in their task view.'}
                   </p>
                   <Textarea
                     id="reject-contributor-note"
-                    placeholder="e.g. Please add the GitHub PR link and a short summary of changes…"
+                    placeholder={
+                      confirm.kind === 'undo_complete_task'
+                        ? 'e.g. Approved in error — please resubmit after fixing…'
+                        : 'e.g. Please add the GitHub PR link and a short summary of changes…'
+                    }
                     value={rejectNote}
                     onChange={(e) => setRejectNote(e.target.value.slice(0, 500))}
                     className="min-h-[100px] resize-none border-border bg-background text-sm text-foreground placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-destructive/25"
@@ -1659,7 +1764,7 @@ export default function AdminPage() {
                   }}
                 >
                   <XCircle className="size-4 shrink-0" />
-                  Yes, reject submission
+                  {confirm.kind === 'undo_complete_task' ? 'Yes, mark rejected' : 'Yes, reject submission'}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </>
