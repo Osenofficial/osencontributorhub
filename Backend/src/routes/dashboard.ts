@@ -697,22 +697,23 @@ function canRaiseInvoice(role: string): boolean {
 
 function canViewInvoiceStage(role: string, invoice: any): boolean {
   if (role === "admin") return true;
-  if (role === "accounts") return ["pending_accounts", "paid"].includes(invoice.status);
+  if (role === "accounts")
+    return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(invoice.status);
   // Evangelist sees only own invoices
   return false;
 }
 
 function canViewInvoiceComments(userRole: string, invoice: any, userId: string | null): boolean {
   if (userRole === "admin") return true;
-  if (userRole === "accounts") return ["pending_accounts", "paid", "rejected"].includes(invoice.status);
+  if (userRole === "accounts")
+    return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(invoice.status);
   const ownerId = invoice.submittedBy?._id?.toString?.() ?? invoice.submittedBy?.toString?.();
   return !!(ownerId && userId && ownerId === userId);
 }
 
-function canPostInvoiceComment(userRole: string, invoice: any): boolean {
-  if (userRole === "admin") return invoice.status === "pending_admin";
-  if (userRole === "accounts") return invoice.status === "pending_accounts";
-  return false;
+/** Anyone who can read the thread may post (admin, accounts on visible stages, submitter on own). All statuses including paid/rejected. */
+function canPostInvoiceComment(userRole: string, invoice: any, userId: string | null): boolean {
+  return canViewInvoiceComments(userRole, invoice, userId);
 }
 
 dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
@@ -787,7 +788,7 @@ dashboardRouter.get("/invoices", async (req: AuthRequest, res, next) => {
     }
 
     if (role === "accounts") {
-      const invoices = await Invoice.find({ status: { $in: ["pending_accounts", "paid"] } })
+      const invoices = await Invoice.find({ status: { $in: ["pending_accounts", "paid", "rejected"] } })
         .populate("submittedBy", "name email role")
         .populate("adminReviewedBy", "name email role")
         .populate("accountsReviewedBy", "name email role")
@@ -1088,7 +1089,13 @@ dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
 // ----- Invoice review comments -----
 dashboardRouter.get("/invoices/:id/comments", async (req: AuthRequest, res, next) => {
   try {
-    const invoice = await Invoice.findById(req.params.id).populate("comments.author", "name email avatar role");
+    const invoice = await Invoice.findById(req.params.id)
+      .populate("submittedBy", "_id")
+      .populate({
+        path: "comments.author",
+        select: "name email avatar role",
+        model: "User",
+      });
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
     }
@@ -1099,7 +1106,17 @@ dashboardRouter.get("/invoices/:id/comments", async (req: AuthRequest, res, next
       return res.status(403).json({ message: "You do not have access to this invoice comments" });
     }
 
-    res.json((invoice as any).comments || []);
+    const raw = (invoice as any).comments;
+    const list = Array.isArray(raw) ? raw : [];
+    res.json(
+      list.map((c: any) => ({
+        _id: c._id,
+        author: c.author,
+        role: c.role,
+        body: c.body,
+        createdAt: c.createdAt,
+      }))
+    );
   } catch (err) {
     next(err);
   }
@@ -1112,9 +1129,10 @@ dashboardRouter.post("/invoices/:id/comments", async (req: AuthRequest, res, nex
       return res.status(404).json({ message: "Invoice not found" });
     }
 
-    const canPost = canPostInvoiceComment(req.user!.role, invoice);
+    const userId = req.user?._id?.toString?.() ?? null;
+    const canPost = canPostInvoiceComment(req.user!.role, invoice, userId);
     if (!canPost) {
-      return res.status(403).json({ message: "You do not have permission to comment at this stage" });
+      return res.status(403).json({ message: "You do not have permission to comment on this invoice" });
     }
 
     const { body } = req.body as { body?: unknown };
