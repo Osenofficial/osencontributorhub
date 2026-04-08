@@ -8,9 +8,12 @@ exports.isMailSmtpConfigured = isMailSmtpConfigured;
 exports.sendMail = sendMail;
 exports.logMailStartupStatus = logMailStartupStatus;
 const nodemailer_1 = __importDefault(require("nodemailer"));
-/** When true, outbound email is sent. When false, sendMail no-ops (in-app flows still work). */
+/** When truthy, outbound email is sent. When false, sendMail no-ops (in-app flows still work). */
 function isEmailSendingEnabled() {
-    return String(process.env.ENABLE_EMAIL_NOTIFICATIONS || "").toLowerCase() === "true";
+    const v = String(process.env.ENABLE_EMAIL_NOTIFICATIONS || "")
+        .trim()
+        .toLowerCase();
+    return v === "true" || v === "1" || v === "yes" || v === "on";
 }
 function isMailSmtpConfigured() {
     return Boolean(process.env.EMAIL_HOST?.trim() &&
@@ -31,6 +34,8 @@ function getTransporter() {
             port: Number.isFinite(port) ? port : 587,
             secure,
             requireTLS: requireTLS || undefined,
+            // Prefer IPv4 sockets when host resolves to both (pairs with dns.setDefaultResultOrder in index.ts).
+            ...(String(process.env.EMAIL_SMTP_FAMILY || "4").trim() === "6" ? {} : { family: 4 }),
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASSWORD,
