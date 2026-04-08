@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isEmailSendingEnabled = isEmailSendingEnabled;
 exports.isMailSmtpConfigured = isMailSmtpConfigured;
+exports.isResendConfigured = isResendConfigured;
+exports.isOutboundMailConfigured = isOutboundMailConfigured;
 exports.sendMail = sendMail;
 exports.logMailStartupStatus = logMailStartupStatus;
 const node_dns_1 = __importDefault(require("node:dns"));
@@ -24,11 +26,20 @@ function isEmailSendingEnabled() {
         .toLowerCase();
     return v === "true" || v === "1" || v === "yes" || v === "on";
 }
+/** SMTP credentials present (Nodemailer path). */
 function isMailSmtpConfigured() {
     return Boolean(process.env.EMAIL_HOST?.trim() &&
         process.env.EMAIL_USER?.trim() &&
         process.env.EMAIL_PASSWORD?.trim() &&
         process.env.EMAIL_FROM?.trim());
+}
+/** Resend API key present (HTTPS :443 — works on Render free tier where SMTP ports are blocked). */
+function isResendConfigured() {
+    return Boolean(process.env.RESEND_API_KEY?.trim());
+}
+/** Either Resend or full SMTP — enough to attempt outbound mail. */
+function isOutboundMailConfigured() {
+    return isResendConfigured() || isMailSmtpConfigured();
 }
 let transporter = null;
 function getTransporter() {
@@ -45,8 +56,6 @@ function getTransporter() {
             port: Number.isFinite(port) ? port : 587,
             secure,
             requireTLS: requireTLS || undefined,
-            // Custom lookup: nodemailer may ignore `family`; Gmail AAAA → ENETUNREACH on Render.
-            // tls.servername: after resolve to IPv4, SNI must still use the mail hostname for the cert.
             ...(!useIpv6
                 ? {
                     lookup: smtpLookupIpv4,
@@ -61,13 +70,65 @@ function getTransporter() {
     }
     return transporter;
 }
+async function sendViaResend(options) {
+    const apiKey = process.env.RESEND_API_KEY.trim();
+    const from = process.env.RESEND_FROM?.trim() || process.env.EMAIL_FROM?.trim();
+    if (!from) {
+        return { ok: false, error: "Set RESEND_FROM or EMAIL_FROM for Resend" };
+    }
+    const to = Array.isArray(options.to) ? options.to : [options.to];
+    const body = {
+        from,
+        to,
+        subject: options.subject,
+    };
+    if (options.html)
+        body.html = options.html;
+    if (options.text)
+        body.text = options.text;
+    if (!body.html && !body.text)
+        body.text = "";
+    try {
+        const res = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+        const raw = await res.text();
+        if (!res.ok) {
+            console.error("[mail] Resend failed:", res.status, raw);
+            return { ok: false, error: `Resend ${res.status}: ${raw.slice(0, 300)}` };
+        }
+        let id = "resend";
+        try {
+            const json = JSON.parse(raw);
+            if (json?.id)
+                id = json.id;
+        }
+        catch {
+            /* ignore */
+        }
+        return { ok: true, messageId: id };
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[mail] Resend request failed:", msg);
+        return { ok: false, error: msg };
+    }
+}
 /**
- * Sends one email via SMTP. Respects ENABLE_EMAIL_NOTIFICATIONS and EMAIL_* in .env.
- * Safe to call from routes: failures return { ok: false } instead of throwing.
+ * Sends one email. Uses Resend (HTTPS) when RESEND_API_KEY is set — required on Render free tier
+ * (outbound SMTP 25/465/587 is blocked). Otherwise uses Nodemailer SMTP.
  */
 async function sendMail(options) {
     if (!isEmailSendingEnabled()) {
         return { ok: false, skipped: true, reason: "disabled" };
+    }
+    if (isResendConfigured()) {
+        return sendViaResend(options);
     }
     const transport = getTransporter();
     if (!transport) {
@@ -93,16 +154,20 @@ async function sendMail(options) {
         return { ok: false, error: msg };
     }
 }
-/** Log once at startup so you know if SMTP is ready. */
+/** Log once at startup so you know if outbound mail is ready. */
 function logMailStartupStatus() {
     const sending = isEmailSendingEnabled();
-    const configured = isMailSmtpConfigured();
+    const configured = isOutboundMailConfigured();
     if (!configured) {
-        console.log("[mail] SMTP not configured (set EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM)");
+        console.log("[mail] Outbound not configured — set RESEND_API_KEY (+ RESEND_FROM or EMAIL_FROM), or full SMTP (EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM)");
         return;
     }
     if (!sending) {
-        console.log("[mail] SMTP configured; sending disabled (set ENABLE_EMAIL_NOTIFICATIONS=true to send)");
+        console.log("[mail] Outbound configured; sending disabled (set ENABLE_EMAIL_NOTIFICATIONS=true to send)");
+        return;
+    }
+    if (isResendConfigured()) {
+        console.log("[mail] Resend API configured; outbound email enabled (HTTPS — OK on Render free tier)");
         return;
     }
     console.log("[mail] SMTP configured; outbound email enabled");
