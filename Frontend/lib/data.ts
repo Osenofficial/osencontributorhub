@@ -119,13 +119,17 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   completed: 'Completed',
 }
 
-export const MONTHLY_POINT_CAP = 100
+/** Cycle 2+ — points at or above this count hit the top payout tier (₹5000). */
+export const MONTHLY_POINT_CAP = 181
+
+/** Cycle 1 (legacy) — original program banded up to 100 pts for top tier. */
+export const MONTHLY_POINT_CAP_CYCLE1 = 100
 
 /** Extra points added when task priority is Urgent (admin task form). */
 export const URGENT_TASK_BONUS_POINTS = 3
 
-/** Tiered payout by monthly points (min 10 pts to qualify). Cap 100 pts = ₹5000. */
-export const PAYOUT_TIERS: { min: number; max: number; amount: number }[] = [
+/** Cycle 1 only — original bands (same as launch; totals above 100 count as 100 for tier). */
+export const PAYOUT_TIERS_CYCLE1: { min: number; max: number; amount: number }[] = [
   { min: 10, max: 20, amount: 500 },
   { min: 21, max: 40, amount: 1000 },
   { min: 41, max: 60, amount: 2000 },
@@ -134,18 +138,59 @@ export const PAYOUT_TIERS: { min: number; max: number; amount: number }[] = [
   { min: 100, max: 100, amount: 5000 },
 ]
 
+/** Cycle 2+ — tiered payout by monthly points (min 10 pts). Top tier: 181+ pts = ₹5000. */
+export const PAYOUT_TIERS: { min: number; max: number; amount: number }[] = [
+  { min: 10, max: 20, amount: 500 },
+  { min: 21, max: 50, amount: 1000 },
+  { min: 51, max: 80, amount: 2000 },
+  { min: 81, max: 120, amount: 3000 },
+  { min: 121, max: 180, amount: 4000 },
+  { min: 181, max: Number.MAX_SAFE_INTEGER, amount: 5000 },
+]
+
 export const MIN_POINTS_FOR_PAYOUT = 10
 export const MAX_PAYOUT_INR = 5000
 
-/** Get payout amount and tier label for a given monthly points total. Below 10 pts = no payout. */
-export function getPayoutForPoints(points: number): { amount: number; tierLabel: string } {
+/** Which tier table to show for a contributor cycle (`period.sequence`). */
+export function payoutTiersForCycle(cycleSequence?: number | null) {
+  return cycleSequence === 1 ? PAYOUT_TIERS_CYCLE1 : PAYOUT_TIERS
+}
+
+export function monthlyPointCapForCycle(cycleSequence?: number | null): number {
+  return cycleSequence === 1 ? MONTHLY_POINT_CAP_CYCLE1 : MONTHLY_POINT_CAP
+}
+
+/** Human-readable range for a tier row (top band shows "181+"). */
+export function payoutTierDisplayRange(t: { min: number; max: number }): string {
+  if (t.max >= 1_000_000) return `${t.min}+`
+  if (t.min === t.max) return String(t.min)
+  return `${t.min}-${t.max}`
+}
+
+/** Progress bar toward monthly payout cap (0–100). */
+export function pointsProgressPercent(points: number, cap: number = MONTHLY_POINT_CAP): number {
+  if (cap <= 0) return 0
+  return Math.min(100, Math.round((Math.max(0, points) / cap) * 100))
+}
+
+/**
+ * Get payout for points in a contributor cycle. Pass `period.sequence` from the API.
+ * Cycle 1 keeps legacy bands; cycle 2+ uses the expanded bands.
+ */
+export function getPayoutForPoints(
+  points: number,
+  cycleSequence?: number | null,
+): { amount: number; tierLabel: string } {
+  const useCycle1 = cycleSequence === 1
+  const tiers = useCycle1 ? PAYOUT_TIERS_CYCLE1 : PAYOUT_TIERS
+  const cap = useCycle1 ? MONTHLY_POINT_CAP_CYCLE1 : MONTHLY_POINT_CAP
   if (points < MIN_POINTS_FOR_PAYOUT) {
     return { amount: 0, tierLabel: `Below ${MIN_POINTS_FOR_PAYOUT} pts (no payout)` }
   }
-  const pts = Math.min(points, MONTHLY_POINT_CAP)
-  const tier = PAYOUT_TIERS.find((t) => pts >= t.min && pts <= t.max)
+  const pts = useCycle1 ? Math.min(Math.floor(points), cap) : Math.floor(points)
+  const tier = tiers.find((t) => pts >= t.min && pts <= t.max)
   if (!tier) return { amount: 0, tierLabel: '' }
-  const label = tier.min === tier.max ? `${tier.min} pts` : `${tier.min}-${tier.max} pts`
+  const label = `${payoutTierDisplayRange(tier)} pts`
   return { amount: tier.amount, tierLabel: label }
 }
 

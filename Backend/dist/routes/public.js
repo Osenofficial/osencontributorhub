@@ -5,7 +5,9 @@ const express_1 = require("express");
 const User_1 = require("../models/User");
 const Task_1 = require("../models/Task");
 exports.publicRouter = (0, express_1.Router)();
-const MONTHLY_POINT_CAP = 100;
+/** Aligned with Frontend tier table: top payout at 181+ pts. */
+const MONTHLY_POINT_CAP = 181;
+const MAX_MONTHLY_PAYOUT_INR = 5000;
 const POINT_VALUE_INR = 50;
 exports.publicRouter.get("/stats", async (_req, res, next) => {
     try {
@@ -16,7 +18,7 @@ exports.publicRouter.get("/stats", async (_req, res, next) => {
         res.json({
             totalUsers,
             completedTasks,
-            monthlyCapValue: MONTHLY_POINT_CAP * POINT_VALUE_INR,
+            monthlyCapValue: MAX_MONTHLY_PAYOUT_INR,
             pointValue: POINT_VALUE_INR,
             monthlyCap: MONTHLY_POINT_CAP,
         });

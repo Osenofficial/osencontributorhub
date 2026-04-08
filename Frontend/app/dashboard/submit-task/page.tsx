@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CONTRIBUTION_TYPES, findContributionItemById, type TaskCategory } from '@/lib/contribution-types'
+import { MONTHLY_POINT_CAP, MAX_PAYOUT_INR } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 
 export default function SubmitTaskPage() {
@@ -182,7 +183,9 @@ export default function SubmitTaskPage() {
                   onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
                   className="w-full bg-background border-border"
                 />
-                <p className="text-xs text-muted-foreground">Payout by monthly points tier (min 10 pts) · Cap 100 pts = ₹5000</p>
+                <p className="text-xs text-muted-foreground">
+                  Payout by monthly points tier (min 10 pts) · Cap {MONTHLY_POINT_CAP}+ pts = ₹{MAX_PAYOUT_INR}
+                </p>
               </div>
             </div>
           </div>

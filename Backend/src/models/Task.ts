@@ -42,6 +42,8 @@ export interface ITask extends Document {
   history: ITaskHistoryEntry[];
   /** Contributors request pool tasks here; admin/lead approves to assign. */
   pendingAssignmentRequests?: IPendingAssignmentRequest[];
+  /** Admin-controlled program cycle; set when the task is created. */
+  contributorPeriod?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +99,7 @@ const TaskSchema = new Schema<ITask>(
       ],
       default: [],
     },
+    contributorPeriod: { type: Schema.Types.ObjectId, ref: "ContributorPeriod", index: true },
   },
   { timestamps: true }
 );

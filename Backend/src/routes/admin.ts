@@ -7,6 +7,8 @@ import {
   LeadActionRequest,
   type LeadActionType,
 } from "../models/LeadActionRequest";
+import { ensureActiveContributorPeriod, startNextContributorPeriod } from "../lib/contributorPeriodService";
+import { queueNotifyUserByEmail, queueNotifyUsersByRole } from "../lib/notifyEmail";
 
 export const adminRouter = Router();
 
@@ -137,6 +139,7 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
       return res.status(400).json({ message: assignErr });
     }
 
+    const period = await ensureActiveContributorPeriod(adminId);
     const task = await Task.create({
       title,
       description,
@@ -146,6 +149,7 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
       priority,
       assignedTo: assigneeId,
       createdBy: adminId,
+      contributorPeriod: period._id,
       deadline,
       history: [
         {
@@ -165,9 +169,39 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
         title: "New Task Assigned",
         message: title,
       });
+      queueNotifyUserByEmail(
+        assigneeId,
+        "New task assigned",
+        `You have been assigned a new task: "${String(title)}"`,
+      );
     }
 
     res.status(201).json(task);
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.post("/contributor-periods/start", requireRole("admin"), async (req: AuthRequest, res, next) => {
+  try {
+    const result = await startNextContributorPeriod(req.user!._id);
+    res.status(201).json({
+      previous: {
+        id: result.previous._id,
+        sequence: result.previous.sequence,
+        label: result.previous.label,
+        startedAt: result.previous.startedAt,
+        endedAt: result.previous.endedAt,
+      },
+      active: {
+        id: result.active._id,
+        sequence: result.active.sequence,
+        label: result.active.label,
+        startedAt: result.active.startedAt,
+        endedAt: result.active.endedAt,
+        isActive: true,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -178,6 +212,7 @@ adminRouter.get("/tasks", requireRole("admin", "lead"), async (_req: AuthRequest
     const tasks = await Task.find()
       .populate("assignedTo", "name email")
       .populate("createdBy", "name email")
+      .populate("contributorPeriod", "sequence label startedAt endedAt")
       .populate("pendingAssignmentRequests.user", "name email")
       .sort({ createdAt: -1 });
     res.json(tasks);
@@ -219,6 +254,19 @@ async function assigneeValidationError(assigneeId: string | null): Promise<strin
   return null;
 }
 
+/**
+ * Lead may PATCH only `{ assignedTo: ownUserId }` to claim an open pool task (no other fields).
+ * Reassigning from another user still requires an admin-approved edit request.
+ */
+function isLeadSelfAssignOnlyPatch(req: AuthRequest, body: Record<string, unknown>, task: any): boolean {
+  if (req.user!.role !== "lead") return false;
+  if (task.assignedTo != null) return false;
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || keys[0] !== "assignedTo") return false;
+  const next = parseAssigneeIdFromBody(body.assignedTo);
+  return Boolean(next && String(next) === String(req.user!._id));
+}
+
 function applyCreatorPayloadToTask(task: any, body: Record<string, unknown>) {
   const { title, description, deadline, category, contributionType, priority, assignedTo, points } = body;
   if (title !== undefined) task.title = String(title).trim();
@@ -253,6 +301,7 @@ async function notifyAdminsLeadActionLine(message: string) {
       message,
     });
   }
+  queueNotifyUsersByRole("admin", "Lead action needs approval", message);
 }
 
 adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
@@ -263,22 +312,23 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
     }
 
     const isAdmin = req.user!.role === "admin";
-    const leadNeedsApproval =
-      req.user!.role === "lead" && !taskCreatedByUser(task, req.user!._id);
+    const isLead = req.user!.role === "lead";
 
     const hasCreatorUpdates = CREATOR_EDIT_FIELDS.some((k) => req.body[k] !== undefined);
+    const leadSelfAssignOnly = isLeadSelfAssignOnlyPatch(req, req.body, task);
 
     if (hasCreatorUpdates) {
-      if (leadNeedsApproval) {
+      if (isLead && !leadSelfAssignOnly) {
         return res.status(403).json({
           code: "LEAD_REQUIRES_APPROVAL",
           message:
-            "Leads can only edit tasks they created directly. Submit an approval request to change another user’s task.",
+            "Leads cannot edit tasks directly. Submit an edit request from the Tasks panel — an admin must approve before changes apply.",
         });
       }
-      if (!isAdmin && !taskCreatedByUser(task, req.user!._id)) {
+      if (!isLead && !isAdmin && !taskCreatedByUser(task, req.user!._id)) {
         return res.status(403).json({ message: "Only the task creator or an admin can edit task details" });
       }
+      const prevAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
       if (req.body.assignedTo !== undefined) {
         const nextAssignee = parseAssigneeIdFromBody(req.body.assignedTo);
         const assignErr = await assigneeValidationError(nextAssignee);
@@ -295,15 +345,30 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
         createdAt: new Date(),
         meta: { fields: CREATOR_EDIT_FIELDS.filter((k) => req.body[k] !== undefined) },
       });
+      if (req.body.assignedTo !== undefined) {
+        const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
+        if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
+          await Notification.create({
+            user: nextAssigneeId,
+            title: "New Task Assigned",
+            message: task.title,
+          });
+          queueNotifyUserByEmail(
+            nextAssigneeId,
+            "New task assigned",
+            `You have been assigned a new task: "${String(task.title)}"`,
+          );
+        }
+      }
     }
 
     const fromStatus = task.status;
     if (req.body.status !== undefined) {
-      if (leadNeedsApproval) {
+      if (isLead) {
         return res.status(403).json({
           code: "LEAD_REQUIRES_APPROVAL",
           message:
-            "Leads can only approve or reject submissions on tasks they created. Submit an approval request for this task.",
+            "Leads cannot approve or reject submissions directly. Submit a request from the Tasks panel — an admin must approve.",
         });
       }
       const nextStatus = req.body.status as (typeof task)["status"];
@@ -347,31 +412,37 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
     await task.save();
 
     if (fromStatus === "submitted" && task.status === "completed" && task.assignedTo) {
+      const msg = `Your submission for "${task.title}" has been approved!`;
       await Notification.create({
         user: task.assignedTo,
         title: "Task Approved",
-        message: `Your submission for "${task.title}" has been approved!`,
+        message: msg,
       });
+      queueNotifyUserByEmail(task.assignedTo, "Task approved", msg);
     }
 
     if (fromStatus === "submitted" && (task.status === "rejected" || task.status === "in_progress") && task.assignedTo) {
+      const msg = rejectComment
+        ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
+        : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
       await Notification.create({
         user: task.assignedTo,
         title: "Submission needs revision",
-        message: rejectComment
-          ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
-          : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+        message: msg,
       });
+      queueNotifyUserByEmail(task.assignedTo, "Submission needs revision", msg);
     }
 
     if (fromStatus === "completed" && task.status === "rejected" && task.assignedTo) {
+      const msg = rejectComment
+        ? `Your completed task "${task.title}" was marked rejected by an admin (approval reversed). Reason: "${rejectComment}". Contact your lead if this is unexpected.`
+        : `Your completed task "${task.title}" was marked rejected by an admin to reverse a mistaken approval. Contact your lead if this is unexpected.`;
       await Notification.create({
         user: task.assignedTo,
         title: "Task approval reversed",
-        message: rejectComment
-          ? `Your completed task "${task.title}" was marked rejected by an admin (approval reversed). Reason: "${rejectComment}". Contact your lead if this is unexpected.`
-          : `Your completed task "${task.title}" was marked rejected by an admin to reverse a mistaken approval. Contact your lead if this is unexpected.`,
+        message: msg,
       });
+      queueNotifyUserByEmail(task.assignedTo, "Task approval reversed", msg);
     }
 
     const populated = await Task.findById(task._id)
@@ -420,8 +491,8 @@ adminRouter.get("/pending-assignment-requests", requireRole("admin", "lead"), as
   }
 });
 
-/** Approve one contributor — assign task to them and clear pending requests. */
-adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
+/** Approve one contributor — assign task to them and clear pending requests. Admin only (leads cannot assign from pool without approval). */
+adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin"), async (req: AuthRequest, res, next) => {
   try {
     const { userId } = req.body as { userId?: string };
     if (!userId || String(userId).trim() === "") {
@@ -458,11 +529,13 @@ adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), 
     });
     await task.save();
 
+    const assignMsg = `You've been assigned: "${task.title}"`;
     await Notification.create({
       user: userId,
       title: "Task assigned to you",
-      message: `You've been assigned: "${task.title}"`,
+      message: assignMsg,
     });
+    queueNotifyUserByEmail(userId, "Task assigned to you", assignMsg);
 
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
@@ -474,8 +547,8 @@ adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), 
   }
 });
 
-/** Remove one user's request without assigning (decline). */
-adminRouter.post("/tasks/:id/reject-assignment", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
+/** Remove one user's request without assigning (decline). Admin only. */
+adminRouter.post("/tasks/:id/reject-assignment", requireRole("admin"), async (req: AuthRequest, res, next) => {
   try {
     const { userId } = req.body as { userId?: string };
     if (!userId) {
@@ -494,11 +567,13 @@ adminRouter.post("/tasks/:id/reject-assignment", requireRole("admin", "lead"), a
     }
     await task.save();
 
+    const declineMsg = `Your request to work on "${task.title}" was declined.`;
     await Notification.create({
       user: userId,
       title: "Assignment request",
-      message: `Your request to work on "${task.title}" was declined.`,
+      message: declineMsg,
     });
+    queueNotifyUserByEmail(userId, "Assignment request declined", declineMsg);
 
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
@@ -517,26 +592,31 @@ const LEAD_ACTION_TYPES: LeadActionType[] = [
   "approve_submission",
 ];
 
-/** Lead submits edit/delete/approve/reject for a task they did not create — admins approve here. */
+/** Lead submits edit/delete/approve/reject — admins approve here (all task changes go through this for leads). */
 adminRouter.post("/lead-action-requests", requireRole("lead"), async (req: AuthRequest, res, next) => {
   try {
-  const { type, taskId, payload } = req.body as {
+  const { type, taskId, payload, reason: reasonRaw } = req.body as {
       type?: LeadActionType;
       taskId?: string;
       payload?: Record<string, unknown>;
+      reason?: string;
     };
+    const reason = String(reasonRaw ?? "").trim();
+    if (!reason) {
+      return res.status(400).json({ message: "reason is required — explain why you need this action" });
+    }
+    if (reason.length > 2000) {
+      return res.status(400).json({ message: "reason must be at most 2000 characters" });
+    }
+    if (reason.length < 5) {
+      return res.status(400).json({ message: "reason must be at least 5 characters" });
+    }
     if (!type || !taskId || !LEAD_ACTION_TYPES.includes(type)) {
       return res.status(400).json({ message: "type and taskId are required; type must be valid" });
     }
     const task = await Task.findById(taskId);
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
-    }
-    /** Deleting always needs admin approval for leads, including tasks they created. */
-    if (taskCreatedByUser(task, req.user!._id) && type !== "delete_task") {
-      return res.status(400).json({
-        message: "Use normal task actions for tasks you created — no approval needed.",
-      });
     }
     if (type === "approve_submission" || type === "reject_submission") {
       if (task.status !== "submitted") {
@@ -575,13 +655,15 @@ adminRouter.post("/lead-action-requests", requireRole("lead"), async (req: AuthR
       requestedBy: req.user!._id,
       status: "pending",
     payload: normalizedPayload,
+    reason,
     });
     const populated = await LeadActionRequest.findById(doc._id)
       .populate("task", "title status")
       .populate("requestedBy", "name email");
     const leadName = req.user!.name || "A lead";
+    const reasonPreview = reason.length > 120 ? `${reason.slice(0, 117)}…` : reason;
     await notifyAdminsLeadActionLine(
-      `${leadName} requested ${type.replace(/_/g, " ")} for "${task.title}". Open Admin → Lead requests.`
+      `${leadName} requested ${type.replace(/_/g, " ")} for "${task.title}". Reason: ${reasonPreview}`,
     );
     res.status(201).json(populated);
   } catch (err) {
@@ -592,7 +674,15 @@ adminRouter.post("/lead-action-requests", requireRole("lead"), async (req: AuthR
 adminRouter.get("/lead-action-requests", requireRole("admin"), async (_req: AuthRequest, res, next) => {
   try {
     const list = await LeadActionRequest.find({ status: "pending" })
-      .populate("task", "title status createdBy")
+      .populate({
+        path: "task",
+        select:
+          "title description status points deadline category contributionType priority assignedTo createdBy submission",
+        populate: [
+          { path: "assignedTo", select: "name email" },
+          { path: "createdBy", select: "name email" },
+        ],
+      })
       .populate("requestedBy", "name email")
       .sort({ createdAt: -1 });
     res.json(list);
@@ -616,6 +706,9 @@ adminRouter.get("/lead-action-requests/mine", requireRole("lead"), async (req: A
 
 adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), async (req: AuthRequest, res, next) => {
   try {
+    const noteRaw = String((req.body as { note?: unknown })?.note ?? "").trim().slice(0, 1000);
+    const resolutionNote = noteRaw || undefined;
+
     const doc = await LeadActionRequest.findById(req.params.id);
     if (!doc || doc.status !== "pending") {
       return res.status(404).json({ message: "Request not found or already resolved" });
@@ -628,6 +721,7 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
       doc.status = "declined";
       doc.resolvedAt = new Date();
       doc.resolvedBy = adminId as any;
+      doc.resolutionNote = resolutionNote;
       await doc.save();
       return res.status(400).json({ message: "Task no longer exists" });
     }
@@ -677,13 +771,15 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
         });
         await task.save();
         if (task.assignedTo) {
+          const subMsg = rejectComment
+            ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
+            : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
           await Notification.create({
             user: task.assignedTo,
             title: "Submission needs revision",
-            message: rejectComment
-              ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
-              : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`,
+            message: subMsg,
           });
+          queueNotifyUserByEmail(task.assignedTo, "Submission needs revision", subMsg);
         }
         break;
       }
@@ -702,11 +798,13 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
         });
         await task.save();
         if (task.assignedTo) {
+          const apprMsg = `Your submission for "${task.title}" has been approved!`;
           await Notification.create({
             user: task.assignedTo,
             title: "Task Approved",
-            message: `Your submission for "${task.title}" has been approved!`,
+            message: apprMsg,
           });
+          queueNotifyUserByEmail(task.assignedTo, "Task approved", apprMsg);
         }
         break;
       }
@@ -717,13 +815,17 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
     doc.status = "approved";
     doc.resolvedAt = new Date();
     doc.resolvedBy = adminId as any;
+    doc.resolutionNote = resolutionNote;
     await doc.save();
 
+    const noteSuffix = resolutionNote ? ` Note: ${resolutionNote}` : "";
+    const approvedMsg = `Your request (${doc.type.replace(/_/g, " ")}) for "${taskTitle}" was approved by an admin.${noteSuffix}`;
     await Notification.create({
       user: doc.requestedBy,
       title: "Request approved",
-      message: `Your request (${doc.type.replace(/_/g, " ")}) for "${taskTitle}" was approved by an admin.`,
+      message: approvedMsg,
     });
+    queueNotifyUserByEmail(doc.requestedBy, "Lead request approved", approvedMsg);
 
     res.json({ success: true, type: doc.type });
   } catch (err) {
@@ -733,6 +835,9 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
 
 adminRouter.post("/lead-action-requests/:id/decline", requireRole("admin"), async (req: AuthRequest, res, next) => {
   try {
+    const noteRaw = String((req.body as { note?: unknown })?.note ?? "").trim().slice(0, 1000);
+    const resolutionNote = noteRaw || undefined;
+
     const doc = await LeadActionRequest.findById(req.params.id).populate("task", "title");
     if (!doc || doc.status !== "pending") {
       return res.status(404).json({ message: "Request not found or already resolved" });
@@ -740,13 +845,17 @@ adminRouter.post("/lead-action-requests/:id/decline", requireRole("admin"), asyn
     doc.status = "declined";
     doc.resolvedAt = new Date();
     doc.resolvedBy = req.user!._id as any;
+    doc.resolutionNote = resolutionNote;
     await doc.save();
     const t = doc.task as { title?: string } | null;
+    const noteSuffix = resolutionNote ? ` Note: ${resolutionNote}` : "";
+    const declinedMsg = `Your request (${doc.type.replace(/_/g, " ")}) for "${t?.title ?? "a task"}" was declined by an admin.${noteSuffix}`;
     await Notification.create({
       user: doc.requestedBy,
       title: "Request declined",
-      message: `Your request (${doc.type.replace(/_/g, " ")}) for "${t?.title ?? "a task"}" was declined by an admin.`,
+      message: declinedMsg,
     });
+    queueNotifyUserByEmail(doc.requestedBy, "Lead request declined", declinedMsg);
     res.json({ success: true });
   } catch (err) {
     next(err);

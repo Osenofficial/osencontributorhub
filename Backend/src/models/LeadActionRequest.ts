@@ -9,9 +9,13 @@ export interface ILeadActionRequest extends Document {
   status: "pending" | "approved" | "declined";
   /** For edit_task: same shape as PATCH body (creator fields + optional status) */
   payload?: Record<string, unknown>;
+  /** Why the lead is asking for this (visible to admins). */
+  reason?: string;
   createdAt: Date;
   resolvedAt?: Date;
   resolvedBy?: Types.ObjectId;
+  /** Optional message from admin to the lead when resolving (approve or decline). */
+  resolutionNote?: string;
 }
 
 const LeadActionRequestSchema = new Schema<ILeadActionRequest>(
@@ -30,8 +34,10 @@ const LeadActionRequestSchema = new Schema<ILeadActionRequest>(
       index: true,
     },
     payload: { type: Schema.Types.Mixed },
+    reason: { type: String, trim: true, maxlength: 2000 },
     resolvedAt: { type: Date },
     resolvedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    resolutionNote: { type: String, trim: true, maxlength: 1000 },
   },
   { timestamps: true }
 );

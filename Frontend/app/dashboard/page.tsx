@@ -19,9 +19,11 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import {
-  MONTHLY_POINT_CAP,
   getPayoutForPoints,
+  monthlyPointCapForCycle,
+  pointsProgressPercent,
 } from '@/lib/data'
+import { type LeaderboardResponse, leaderboardUrl } from '@/lib/contributor-cycle'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -66,6 +68,7 @@ export default function DashboardPage() {
   const { currentUser } = useApp()
   const [myTasks, setMyTasks] = useState<any[]>([])
   const [sortedUsers, setSortedUsers] = useState<any[]>([])
+  const [activeCycleSequence, setActiveCycleSequence] = useState<number | undefined>(undefined)
 
   useEffect(() => {
     apiFetch<any>('/dashboard/overview')
@@ -75,15 +78,22 @@ export default function DashboardPage() {
       .catch(() => {
         setMyTasks([])
       })
-    apiFetch<any[]>('/dashboard/leaderboard')
-      .then(setSortedUsers)
-      .catch(() => setSortedUsers([]))
+    apiFetch<LeaderboardResponse>(leaderboardUrl(null))
+      .then((data) => {
+        setSortedUsers(Array.isArray(data.leaderboard) ? data.leaderboard : [])
+        setActiveCycleSequence(data.period?.sequence)
+      })
+      .catch(() => {
+        setSortedUsers([])
+        setActiveCycleSequence(undefined)
+      })
   }, [currentUser?.id])
 
   const completedTasks = myTasks.filter((t) => t.status === 'completed')
   const inProgressTasks = myTasks.filter((t) => t.status === 'in_progress')
   const myRank = sortedUsers.findIndex((u) => u.userId === currentUser?.id) + 1
-  const pointsPercent = Math.round(((currentUser?.points ?? 0) / MONTHLY_POINT_CAP) * 100)
+  const monthlyCap = monthlyPointCapForCycle(activeCycleSequence)
+  const pointsPercent = pointsProgressPercent(currentUser?.points ?? 0, monthlyCap)
 
   const todayLabel = new Date().toLocaleDateString('en-IN', {
     weekday: 'long',
@@ -138,7 +148,7 @@ export default function DashboardPage() {
                     <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">This month</p>
                     <p className="text-xl font-bold tabular-nums text-primary">
                       {currentUser?.points ?? 0}
-                      <span className="text-sm font-normal text-muted-foreground"> / {MONTHLY_POINT_CAP}</span>
+                      <span className="text-sm font-normal text-muted-foreground"> / {monthlyCap}</span>
                     </p>
                   </div>
                 </div>
@@ -168,7 +178,7 @@ export default function DashboardPage() {
                 value={currentUser?.points ?? 0}
                 sub={(() => {
                   const pts = currentUser?.points ?? 0
-                  const { amount, tierLabel } = getPayoutForPoints(pts)
+                  const { amount, tierLabel } = getPayoutForPoints(pts, activeCycleSequence)
                   return amount > 0 ? `Est. payout ₹${amount} · ${tierLabel}` : tierLabel
                 })()}
                 icon={Zap}
@@ -195,7 +205,7 @@ export default function DashboardPage() {
                 <StatCard
                   title="Leaderboard"
                   value={`#${myRank}`}
-                  sub={`of ${sortedUsers.length} contributors`}
+                  sub={`Current cycle · ${sortedUsers.length} ranked`}
                   icon={Trophy}
                   color="text-cyan-400"
                   glow="border-cyan-400/25"
@@ -226,13 +236,13 @@ export default function DashboardPage() {
                   <p className="text-xs text-muted-foreground">Caps reset each month — keep contributing.</p>
                 </div>
                 <span className="font-mono text-sm text-primary">
-                  {currentUser?.points ?? 0} / {MONTHLY_POINT_CAP}
+                  {currentUser?.points ?? 0} / {monthlyCap}
                 </span>
               </div>
               <Progress value={pointsPercent} className="h-3 rounded-full bg-muted/80" />
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span>{pointsPercent}% of monthly cap</span>
-                <span className="tabular-nums">{Math.max(0, MONTHLY_POINT_CAP - (currentUser?.points ?? 0))} pts left</span>
+                <span className="tabular-nums">{Math.max(0, monthlyCap - (currentUser?.points ?? 0))} pts left</span>
               </div>
             </div>
             <div className="flex flex-col justify-between rounded-2xl border border-primary/20 bg-primary/[0.06] p-5 lg:col-span-2">

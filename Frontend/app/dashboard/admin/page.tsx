@@ -12,6 +12,7 @@ import {
   Ban,
   Check,
   CalendarIcon,
+  CalendarRange,
   UserPlus,
   XCircle,
   Pencil,
@@ -33,6 +34,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -56,10 +58,12 @@ import {
   TaskCategory,
   Priority,
   MAX_PAYOUT_INR,
+  MONTHLY_POINT_CAP,
   URGENT_TASK_BONUS_POINTS,
 } from '@/lib/data'
 import { apiFetch } from '@/lib/api'
 import { CONTRIBUTION_TYPES, findContributionItemById } from '@/lib/contribution-types'
+import { type ContributorPeriodRow, type ContributorPeriodsResponse } from '@/lib/contributor-cycle'
 import { cn } from '@/lib/utils'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
@@ -81,6 +85,55 @@ type FormState = {
   deadline: string
   assignedTo: string
   priority: Priority
+}
+
+const LEAD_REQUEST_KIND_LABEL: Record<string, string> = {
+  edit_task: 'Edit task',
+  delete_task: 'Delete task',
+  reject_submission: 'Reject submission',
+  approve_submission: 'Approve submission',
+}
+
+const LEAD_REQUEST_FIELD_LABELS: Record<string, string> = {
+  title: 'Title',
+  description: 'Description',
+  deadline: 'Deadline',
+  category: 'Category',
+  contributionType: 'Contribution type',
+  priority: 'Priority',
+  points: 'Points',
+  assignedTo: 'Assign to',
+  status: 'Status',
+  rejectComment: 'Rejection note',
+}
+
+function formatLeadPayloadValue(
+  key: string,
+  val: unknown,
+  members: { _id: string; name?: string }[],
+): string {
+  if (val === null || val === undefined) return '—'
+  if (key === 'assignedTo') {
+    if (val === '' || val === '__pool__') return 'Open pool (unassigned)'
+    const s = String(val)
+    const m = members.find((u) => String(u._id) === s)
+    return m?.name ? `${m.name}` : s
+  }
+  if (key === 'deadline' && val) {
+    try {
+      return new Date(String(val)).toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    } catch {
+      return String(val)
+    }
+  }
+  if (typeof val === 'object') return JSON.stringify(val)
+  return String(val)
 }
 
 const DEFAULT_FORM: FormState = {
@@ -141,21 +194,47 @@ function pointsWithUrgentBonus(basePoints: number, priority: Priority): number {
   return priority === 'urgent' ? Math.min(100, b + URGENT_TASK_BONUS_POINTS) : b
 }
 
-function isTaskCreator(task: any, userId: string | undefined) {
-  if (!userId) return false
-  const cb = task.createdBy?._id ?? task.createdBy
-  return cb != null && String(cb) === String(userId)
+/** Open pool only: lead may assign the task to themselves without an admin edit request. */
+function isLeadSelfAssignOnly(
+  task: any | undefined,
+  form: FormState,
+  user: { id: string; role: string } | null | undefined,
+): boolean {
+  if (!user || !task || user.role !== 'lead') return false
+  const aid = task.assignedTo?._id ?? task.assignedTo
+  if (aid != null) return false
+  if (!form.assignedTo || form.assignedTo === '__pool__') return false
+  if (String(form.assignedTo) !== String(user.id)) return false
+  const base = taskToFormState(task)
+  return (
+    form.title === base.title &&
+    form.description === base.description &&
+    form.contributionType === base.contributionType &&
+    form.category === base.category &&
+    form.points === base.points &&
+    form.deadline === base.deadline &&
+    form.priority === base.priority
+  )
 }
 
-/** Admins may edit/approve any task; leads may edit tasks they created (else they submit an approval request). Deletes: admins only directly; leads always request approval. */
+/** Admins edit directly. Leads only for self-assign on an open pool task (see isLeadSelfAssignOnly). */
 function canActDirectOnTask(
   task: any | undefined,
   user: { id: string; role: string } | null | undefined,
+  form?: FormState,
 ) {
   if (!user || !task) return false
   if (user.role === 'admin') return true
-  return isTaskCreator(task, user.id)
+  if (user.role === 'lead' && form && isLeadSelfAssignOnly(task, form, user)) return true
+  return false
 }
+
+/** Lead POST /lead-action-requests — must include `reason` after modal. */
+type LeadActionSubmitPending =
+  | { type: 'edit_task'; taskId: string; payload: Record<string, unknown> }
+  | { type: 'delete_task'; taskId: string }
+  | { type: 'approve_submission'; taskId: string }
+  | { type: 'reject_submission'; taskId: string; payload?: { rejectComment?: string } }
 
 type AdminConfirm =
   | null
@@ -264,6 +343,18 @@ export default function AdminPage() {
   const [leadActionRequests, setLeadActionRequests] = useState<any[]>([])
   const [confirm, setConfirm] = useState<AdminConfirm>(null)
   const [rejectNote, setRejectNote] = useState('')
+  const [contributorPeriods, setContributorPeriods] = useState<ContributorPeriodRow[]>([])
+  const [startCycleConfirmOpen, setStartCycleConfirmOpen] = useState(false)
+  const [startingNextCycle, setStartingNextCycle] = useState(false)
+  const [leadRequestPreview, setLeadRequestPreview] = useState<any | null>(null)
+  const [leadActionSubmitPending, setLeadActionSubmitPending] = useState<LeadActionSubmitPending | null>(null)
+  const [leadReasonModalOpen, setLeadReasonModalOpen] = useState(false)
+  const [leadReasonText, setLeadReasonText] = useState('')
+  const [leadReasonError, setLeadReasonError] = useState('')
+  const [leadReasonSubmitting, setLeadReasonSubmitting] = useState(false)
+  const [leadResolveAlert, setLeadResolveAlert] = useState<{ req: any; action: 'approve' | 'decline' } | null>(null)
+  const [leadResolveNote, setLeadResolveNote] = useState('')
+  const [leadResolveSubmitting, setLeadResolveSubmitting] = useState(false)
 
   function formatDate(value: string | Date | undefined) {
     if (!value) return '—'
@@ -285,6 +376,77 @@ export default function AdminPage() {
       .catch(() => setLeadActionRequests([]))
   }
 
+  function submitLeadActionWithReason() {
+    if (!leadActionSubmitPending || !currentUser) return
+    const trimmed = leadReasonText.trim()
+    if (trimmed.length < 5) {
+      setLeadReasonError('Please enter at least 5 characters explaining why you need this action.')
+      return
+    }
+    setLeadReasonError('')
+    setLeadReasonSubmitting(true)
+    apiFetch('/admin/lead-action-requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: leadActionSubmitPending.type,
+        taskId: leadActionSubmitPending.taskId,
+        payload:
+          leadActionSubmitPending.type === 'reject_submission'
+            ? leadActionSubmitPending.payload
+            : leadActionSubmitPending.type === 'edit_task'
+              ? leadActionSubmitPending.payload
+              : undefined,
+        reason: trimmed,
+      }),
+    })
+      .then(() => {
+        setLeadReasonModalOpen(false)
+        setLeadActionSubmitPending(null)
+        setLeadReasonText('')
+        setLeadReasonError('')
+        setTaskForm(null)
+        setForm(DEFAULT_FORM)
+        setViewTask(null)
+        apiFetch<Task[]>('/admin/tasks')
+          .then(setTasks)
+          .catch(() => undefined)
+      })
+      .catch(() => {
+        setLeadReasonError('Could not submit. Try again.')
+      })
+      .finally(() => setLeadReasonSubmitting(false))
+  }
+
+  function openLeadResolveConfirm(req: any, action: 'approve' | 'decline', initialNote?: string) {
+    setLeadResolveAlert({ req, action })
+    setLeadResolveNote(initialNote?.trim() ?? '')
+  }
+
+  function submitLeadResolve() {
+    if (!leadResolveAlert) return
+    const { req, action } = leadResolveAlert
+    const id = req._id
+    const path = action === 'approve' ? 'approve' : 'decline'
+    setLeadResolveSubmitting(true)
+    apiFetch(`/admin/lead-action-requests/${id}/${path}`, {
+      method: 'POST',
+      body: JSON.stringify({ note: leadResolveNote.trim() || undefined }),
+    })
+      .then(() => {
+        setLeadActionRequests((prev) => prev.filter((r) => r._id !== id))
+        setLeadResolveAlert(null)
+        setLeadResolveNote('')
+        setLeadRequestPreview((p: any) => (p?._id === id ? null : p))
+        if (action === 'approve') {
+          apiFetch<Task[]>('/admin/tasks')
+            .then(setTasks)
+            .catch(() => undefined)
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => setLeadResolveSubmitting(false))
+  }
+
   useEffect(() => {
     apiFetch<Task[]>('/admin/tasks')
       .then(setTasks)
@@ -303,7 +465,34 @@ export default function AdminPage() {
     }
   }, [currentUser.role])
 
+  useEffect(() => {
+    apiFetch<ContributorPeriodsResponse>('/dashboard/contributor-periods')
+      .then((d) => setContributorPeriods(Array.isArray(d.periods) ? d.periods : []))
+      .catch(() => setContributorPeriods([]))
+  }, [currentUser?.id])
+
+  const activeContributorCycle = contributorPeriods.find((p) => p.isActive)
+
   const canManageUsers = currentUser.role === 'admin'
+
+  async function handleStartNextContributorCycle() {
+    if (!currentUser || currentUser.role !== 'admin') return
+    setStartingNextCycle(true)
+    try {
+      await apiFetch('/admin/contributor-periods/start', { method: 'POST' })
+      const [periodsRes, tasksRes] = await Promise.all([
+        apiFetch<ContributorPeriodsResponse>('/dashboard/contributor-periods'),
+        apiFetch<Task[]>('/admin/tasks'),
+      ])
+      setContributorPeriods(Array.isArray(periodsRes.periods) ? periodsRes.periods : [])
+      setTasks(Array.isArray(tasksRes) ? tasksRes : [])
+      setStartCycleConfirmOpen(false)
+    } catch {
+      /* toast optional */
+    } finally {
+      setStartingNextCycle(false)
+    }
+  }
 
   if (currentUser.role !== 'admin' && currentUser.role !== 'lead') {
     return (
@@ -350,7 +539,7 @@ export default function AdminPage() {
   }
 
   function handleUpdateTask() {
-    if (!taskForm || taskForm.mode !== 'edit') return
+    if (!taskForm || taskForm.mode !== 'edit' || !currentUser) return
     if (!form.title || !form.deadline || !form.contributionType) return
     const taskId = taskForm.taskId
     const assignPayload =
@@ -366,10 +555,14 @@ export default function AdminPage() {
       priority: form.priority,
     }
     const existing = findTaskById(taskId)
-    if (canActDirectOnTask(existing, currentUser)) {
+    if (canActDirectOnTask(existing, currentUser, form)) {
+      const patchBody =
+        currentUser.role === 'lead' && isLeadSelfAssignOnly(existing, form, currentUser)
+          ? { assignedTo: form.assignedTo }
+          : payload
       apiFetch<Task>(`/admin/tasks/${taskId}`, {
         method: 'PATCH',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(patchBody),
       })
         .then((task) => {
           setTasks((prev) =>
@@ -385,15 +578,10 @@ export default function AdminPage() {
         })
         .catch(() => {})
     } else {
-      apiFetch('/admin/lead-action-requests', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'edit_task', taskId, payload }),
-      })
-        .then(() => {
-          setForm(DEFAULT_FORM)
-          setTaskForm(null)
-        })
-        .catch(() => {})
+      setLeadActionSubmitPending({ type: 'edit_task', taskId, payload })
+      setLeadReasonText('')
+      setLeadReasonError('')
+      setLeadReasonModalOpen(true)
     }
   }
 
@@ -411,10 +599,10 @@ export default function AdminPage() {
         }),
       )
     } else {
-      apiFetch('/admin/lead-action-requests', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'approve_submission', taskId }),
-      }).catch(() => {})
+      setLeadActionSubmitPending({ type: 'approve_submission', taskId })
+      setLeadReasonText('')
+      setLeadReasonError('')
+      setLeadReasonModalOpen(true)
     }
     setViewTask(null)
   }
@@ -442,10 +630,14 @@ export default function AdminPage() {
         })
         .catch(() => {})
     } else {
-      apiFetch('/admin/lead-action-requests', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'reject_submission', taskId, payload: { rejectComment } }),
-      }).catch(() => {})
+      setLeadActionSubmitPending({
+        type: 'reject_submission',
+        taskId,
+        payload: rejectComment ? { rejectComment } : undefined,
+      })
+      setLeadReasonText('')
+      setLeadReasonError('')
+      setLeadReasonModalOpen(true)
       setViewTask(null)
     }
   }
@@ -481,15 +673,16 @@ export default function AdminPage() {
       }).catch(() => {})
       setTasks((prev) => prev.filter((task) => ((task as any)._id ?? task.id) !== taskId))
     } else if (currentUser.role === 'lead') {
-      apiFetch('/admin/lead-action-requests', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'delete_task', taskId }),
-      }).catch(() => {})
+      setLeadActionSubmitPending({ type: 'delete_task', taskId })
+      setLeadReasonText('')
+      setLeadReasonError('')
+      setLeadReasonModalOpen(true)
     }
     setViewTask(null)
   }
 
   function handleApproveAssignment(taskId: string, userId: string) {
+    if (currentUser?.role !== 'admin') return
     apiFetch(`/admin/tasks/${taskId}/approve-assignment`, {
       method: 'POST',
       body: JSON.stringify({ userId }),
@@ -502,6 +695,7 @@ export default function AdminPage() {
   }
 
   function handleRejectAssignment(taskId: string, userId: string) {
+    if (currentUser?.role !== 'admin') return
     apiFetch(`/admin/tasks/${taskId}/reject-assignment`, {
       method: 'POST',
       body: JSON.stringify({ userId }),
@@ -593,6 +787,11 @@ export default function AdminPage() {
           <p className="truncate text-sm font-medium">{task.title}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Created {formatDate(task.createdAt)}
+            {task.contributorPeriod && (
+              <span className="ml-2 text-violet-600 dark:text-violet-400">
+                · {(task.contributorPeriod as { label?: string }).label ?? 'Cycle'}
+              </span>
+            )}
             <span className="ml-2">
               {assignee?.name ? (
                 <>
@@ -749,6 +948,65 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {currentUser.role === 'admin' && (
+          <div className="glass rounded-xl border border-primary/25 bg-primary/[0.06] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex gap-3 min-w-0">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/15 border border-primary/25">
+                <CalendarRange className="size-5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-wide text-primary">Contributor cycle</p>
+                <p className="text-sm font-semibold mt-0.5 truncate">
+                  {activeContributorCycle?.label ?? 'Loading…'}
+                  {activeContributorCycle?.isActive ? (
+                    <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">(open — new tasks use this)</span>
+                  ) : null}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  When you start the next cycle, the current one closes. Every task created from then on is tagged with
+                  the new cycle; the leaderboard ranks completed points per cycle.
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-primary/40"
+              onClick={() => setStartCycleConfirmOpen(true)}
+            >
+              Start next cycle
+            </Button>
+          </div>
+        )}
+
+        <AlertDialog open={startCycleConfirmOpen} onOpenChange={setStartCycleConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Start the next contributor cycle?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <span className="block">
+                  The current cycle <strong>{activeContributorCycle?.label ?? ''}</strong> will be closed. New tasks
+                  (including ones you create next) will belong to the new cycle. Past tasks keep their original cycle
+                  tag.
+                </span>
+                <span className="block text-foreground">This does not delete any tasks or points.</span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={startingNextCycle}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={startingNextCycle}
+                onClick={(e) => {
+                  e.preventDefault()
+                  void handleStartNextContributorCycle()
+                }}
+              >
+                {startingNextCycle ? 'Starting…' : 'Yes, start next cycle'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {/* Tabs */}
         <div className="flex items-center justify-between">
           <div className="inline-flex rounded-full border border-border/60 bg-muted/30 p-1 text-xs">
@@ -786,7 +1044,12 @@ export default function AdminPage() {
               <UserPlus className="size-4" /> Assignment requests ({pendingAssignmentTasks.length} tasks)
             </h3>
             <p className="mb-4 text-xs text-muted-foreground">
-              Contributors asked to work on these open pool tasks. Approve to assign them, or decline to remove the request.
+              Contributors (and leads) asked to work on these open pool tasks.{' '}
+              {canManageUsers ? (
+                <>Approve to assign them, or decline to remove the request.</>
+              ) : (
+                <span className="font-medium text-foreground">Only an admin can approve or decline — contact an admin.</span>
+              )}
             </p>
             <div className="space-y-4">
               {pendingAssignmentTasks.map((task: any) => (
@@ -822,37 +1085,43 @@ export default function AdminPage() {
                             </span>
                           </div>
                           <div className="flex shrink-0 gap-2">
-                            <Button
-                              size="sm"
-                              className="gap-1 bg-primary/90 text-primary-foreground"
-                              onClick={() =>
-                                setConfirm({
-                                  kind: 'approve_assignment',
-                                  taskId: String(task._id ?? task.id),
-                                  userId: String(uid),
-                                  title: task.title ?? 'this task',
-                                  userName: uname,
-                                })
-                              }
-                            >
-                              <Check className="size-3.5" /> Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-1 text-muted-foreground"
-                              onClick={() =>
-                                setConfirm({
-                                  kind: 'reject_assignment',
-                                  taskId: String(task._id ?? task.id),
-                                  userId: String(uid),
-                                  title: task.title ?? 'this task',
-                                  userName: uname,
-                                })
-                              }
-                            >
-                              <XCircle className="size-3.5" /> Decline
-                            </Button>
+                            {canManageUsers ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  className="gap-1 bg-primary/90 text-primary-foreground"
+                                  onClick={() =>
+                                    setConfirm({
+                                      kind: 'approve_assignment',
+                                      taskId: String(task._id ?? task.id),
+                                      userId: String(uid),
+                                      title: task.title ?? 'this task',
+                                      userName: uname,
+                                    })
+                                  }
+                                >
+                                  <Check className="size-3.5" /> Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1 text-muted-foreground"
+                                  onClick={() =>
+                                    setConfirm({
+                                      kind: 'reject_assignment',
+                                      taskId: String(task._id ?? task.id),
+                                      userId: String(uid),
+                                      title: task.title ?? 'this task',
+                                      userName: uname,
+                                    })
+                                  }
+                                >
+                                  <XCircle className="size-3.5" /> Decline
+                                </Button>
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground">Admin only</span>
+                            )}
                           </div>
                         </div>
                       )
@@ -870,8 +1139,7 @@ export default function AdminPage() {
               <Shield className="size-4" /> Lead requests — needs your approval ({leadActionRequests.length})
             </h3>
             <p className="mb-4 text-xs text-muted-foreground">
-              Leads asked to edit, delete, approve, or reject work on tasks they didn&apos;t create. Approve to apply, or
-              decline.
+              Leads asked to edit, delete, approve, or reject tasks. Approve to apply the change, or decline.
             </p>
             <div className="space-y-3">
               {leadActionRequests.map((req: any) => {
@@ -900,32 +1168,29 @@ export default function AdminPage() {
                           : ''}
                       </p>
                     </div>
-                    <div className="flex shrink-0 gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="size-9 shrink-0 p-0 text-muted-foreground"
+                        title="View what the lead requested"
+                        onClick={() => setLeadRequestPreview(req)}
+                      >
+                        <Eye className="size-4" />
+                        <span className="sr-only">View request details</span>
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
                         className="text-muted-foreground"
-                        onClick={() => {
-                          apiFetch(`/admin/lead-action-requests/${req._id}/decline`, { method: 'POST' })
-                            .then(() => {
-                              setLeadActionRequests((prev) => prev.filter((r) => r._id !== req._id))
-                            })
-                            .catch(() => {})
-                        }}
+                        onClick={() => openLeadResolveConfirm(req, 'decline')}
                       >
                         Decline
                       </Button>
                       <Button
                         size="sm"
                         className="gap-1 bg-primary/90 text-primary-foreground"
-                        onClick={() => {
-                          apiFetch(`/admin/lead-action-requests/${req._id}/approve`, { method: 'POST' })
-                            .then(() => {
-                              setLeadActionRequests((prev) => prev.filter((r) => r._id !== req._id))
-                              apiFetch<Task[]>('/admin/tasks').then(setTasks)
-                            })
-                            .catch(() => {})
-                        }}
+                        onClick={() => openLeadResolveConfirm(req, 'approve')}
                       >
                         <Check className="size-3.5" /> Approve
                       </Button>
@@ -936,6 +1201,309 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        <Dialog
+          open={leadReasonModalOpen}
+          onOpenChange={(open) => {
+            if (!open && !leadReasonSubmitting) {
+              setLeadReasonModalOpen(false)
+              setLeadActionSubmitPending(null)
+              setLeadReasonText('')
+              setLeadReasonError('')
+            }
+          }}
+        >
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="text-base">Reason for your request</DialogTitle>
+              <DialogDescription className="text-left text-sm text-muted-foreground">
+                Explain why you need this action. Admins read this before they approve or decline (at least 5
+                characters).
+              </DialogDescription>
+            </DialogHeader>
+            {leadActionSubmitPending?.type === 'reject_submission' &&
+              leadActionSubmitPending.payload?.rejectComment && (
+                <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Note for contributor: </span>
+                  {leadActionSubmitPending.payload.rejectComment}
+                </div>
+              )}
+            <div className="space-y-2">
+              <Label htmlFor="lead-action-reason">Why are you requesting this?</Label>
+              <Textarea
+                id="lead-action-reason"
+                value={leadReasonText}
+                onChange={(e) => {
+                  setLeadReasonText(e.target.value)
+                  if (leadReasonError) setLeadReasonError('')
+                }}
+                placeholder="Be specific so admins can decide quickly (e.g. scope change, policy, contributor request)."
+                className="min-h-28 resize-y bg-background"
+                disabled={leadReasonSubmitting}
+              />
+              {leadReasonError ? <p className="text-xs text-destructive">{leadReasonError}</p> : null}
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={leadReasonSubmitting}
+                onClick={() => {
+                  if (leadReasonSubmitting) return
+                  setLeadReasonModalOpen(false)
+                  setLeadActionSubmitPending(null)
+                  setLeadReasonText('')
+                  setLeadReasonError('')
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="button" disabled={leadReasonSubmitting} onClick={submitLeadActionWithReason}>
+                {leadReasonSubmitting ? 'Submitting…' : 'Submit request'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!leadRequestPreview} onOpenChange={(open) => !open && setLeadRequestPreview(null)}>
+          <DialogContent className="max-h-[min(85vh,36rem)] max-w-lg overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-base">Lead request details</DialogTitle>
+              <DialogDescription className="text-left text-xs text-muted-foreground">
+                Review what the lead asked for before you approve or decline.
+              </DialogDescription>
+            </DialogHeader>
+            {leadRequestPreview && (
+              <div className="space-y-4 text-sm">
+                {leadRequestPreview.reason ? (
+                  <div className="rounded-lg border border-blue-500/25 bg-blue-500/[0.06] p-3 space-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-blue-600 dark:text-blue-400">
+                      Lead&apos;s reason
+                    </p>
+                    <p className="whitespace-pre-wrap text-sm text-foreground">{leadRequestPreview.reason}</p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] italic text-muted-foreground">No reason on file (legacy request).</p>
+                )}
+                <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Request type</p>
+                  <p className="font-semibold text-foreground">
+                    {LEAD_REQUEST_KIND_LABEL[String(leadRequestPreview.type)] ??
+                      String(leadRequestPreview.type).replace(/_/g, ' ')}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Task</p>
+                  <p className="font-medium text-foreground">{leadRequestPreview.task?.title ?? '—'}</p>
+                  {leadRequestPreview.task && (
+                    <div className="grid gap-1 text-xs text-muted-foreground">
+                      <span>
+                        Status:{' '}
+                        <span className="text-foreground">{String(leadRequestPreview.task.status ?? '—')}</span>
+                      </span>
+                      {(leadRequestPreview.task.assignedTo?.name ||
+                        leadRequestPreview.task.assignedTo) && (
+                        <span>
+                          Currently assigned:{' '}
+                          <span className="text-foreground">
+                            {leadRequestPreview.task.assignedTo?.name ??
+                              String(leadRequestPreview.task.assignedTo ?? '')}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2 border-t border-border/50 pt-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-orange-400/90">
+                    What the lead is asking for
+                  </p>
+                  {leadRequestPreview.type === 'edit_task' && (
+                    <>
+                      {leadRequestPreview.payload &&
+                      typeof leadRequestPreview.payload === 'object' &&
+                      Object.keys(leadRequestPreview.payload).length > 0 ? (
+                        <div className="space-y-2 rounded-md border border-border/50 bg-card/50 p-3">
+                          {Object.entries(leadRequestPreview.payload as Record<string, unknown>).map(
+                            ([key, val]) =>
+                              val !== undefined ? (
+                                <div
+                                  key={key}
+                                  className="grid gap-0.5 border-b border-border/30 pb-2 last:border-0 last:pb-0"
+                                >
+                                  <span className="text-[11px] font-medium text-muted-foreground">
+                                    {LEAD_REQUEST_FIELD_LABELS[key] ?? key}
+                                  </span>
+                                  <span className="whitespace-pre-wrap break-words text-foreground">
+                                    {formatLeadPayloadValue(key, val, members)}
+                                  </span>
+                                </div>
+                              ) : null,
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          No field changes were stored on this request. You can still decline or check the task in the
+                          list.
+                        </p>
+                      )}
+                      <p className="text-[11px] text-muted-foreground">
+                        Approving applies these values to the task (same as editing the task with this data).
+                      </p>
+                    </>
+                  )}
+                  {leadRequestPreview.type === 'delete_task' && (
+                    <p className="text-foreground">
+                      The lead wants to <strong>permanently delete</strong> this task. This cannot be undone after
+                      approval.
+                    </p>
+                  )}
+                  {leadRequestPreview.type === 'approve_submission' && (
+                    <p className="text-foreground">
+                      The lead wants to <strong>approve</strong> the contributor&apos;s submission and mark this task{' '}
+                      <strong>completed</strong> (with points awarded per task rules).
+                    </p>
+                  )}
+                  {leadRequestPreview.type === 'reject_submission' && (
+                    <div className="space-y-2">
+                      <p className="text-foreground">
+                        The lead wants to <strong>reject</strong> the submission so the contributor can revise.
+                      </p>
+                      {(leadRequestPreview.payload as { rejectComment?: string } | undefined)?.rejectComment ? (
+                        <div className="rounded-md border border-border/50 bg-muted/40 p-2">
+                          <p className="text-[11px] font-medium text-muted-foreground">Suggested rejection note</p>
+                          <p className="whitespace-pre-wrap text-sm text-foreground">
+                            {(leadRequestPreview.payload as { rejectComment?: string }).rejectComment}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+                <div className="border-t border-border/50 pt-2 text-[11px] text-muted-foreground">
+                  Requested by {leadRequestPreview.requestedBy?.name ?? 'Lead'}
+                  {leadRequestPreview.requestedBy?.email
+                    ? ` · ${leadRequestPreview.requestedBy.email}`
+                    : ''}
+                  {leadRequestPreview.createdAt
+                    ? ` · ${new Date(leadRequestPreview.createdAt).toLocaleString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}`
+                    : ''}
+                </div>
+                {(leadRequestPreview.task?._id ?? leadRequestPreview.task?.id) != null &&
+                leadRequestPreview.task != null ? (
+                  <div className="border-t border-border/50 pt-4">
+                    <div className="rounded-xl border border-border bg-secondary p-4">
+                      <TaskComments
+                        taskId={String(leadRequestPreview.task._id ?? leadRequestPreview.task.id)}
+                        audience="staff"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+            <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setLeadRequestPreview(null)}>
+                Close
+              </Button>
+              {leadRequestPreview && canManageUsers ? (
+                <>
+                  <Button
+                    variant="outline"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                    onClick={() => openLeadResolveConfirm(leadRequestPreview, 'decline')}
+                  >
+                    <XCircle className="mr-1 size-4" /> Decline
+                  </Button>
+                  <Button
+                    className="gap-1 bg-primary text-primary-foreground"
+                    onClick={() => openLeadResolveConfirm(leadRequestPreview, 'approve')}
+                  >
+                    <Check className="size-4" /> Approve
+                  </Button>
+                </>
+              ) : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <AlertDialog
+          open={!!leadResolveAlert}
+          onOpenChange={(open) => {
+            if (!open && !leadResolveSubmitting) {
+              setLeadResolveAlert(null)
+              setLeadResolveNote('')
+            }
+          }}
+        >
+          <AlertDialogContent className="max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {leadResolveAlert?.action === 'approve'
+                  ? 'Approve this lead request?'
+                  : 'Decline this lead request?'}
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-left text-sm text-muted-foreground">
+                  <p>
+                    {leadResolveAlert?.action === 'approve'
+                      ? 'This will apply the requested action (edit, delete, approve submission, or reject submission) and notify the lead.'
+                      : 'The lead will be notified that their request was declined. The task will not change.'}
+                  </p>
+                  {leadResolveAlert?.req ? (
+                    <p className="rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-foreground">
+                      <span className="text-muted-foreground">Request: </span>
+                      {String(leadResolveAlert.req.type).replace(/_/g, ' ')} ·{' '}
+                      {leadResolveAlert.req.task?.title ?? 'Task'}
+                    </p>
+                  ) : null}
+                  <div className="space-y-2">
+                    <Label htmlFor="lead-resolve-admin-note">Comment (optional)</Label>
+                    <Textarea
+                      id="lead-resolve-admin-note"
+                      value={leadResolveNote}
+                      onChange={(e) => setLeadResolveNote(e.target.value)}
+                      placeholder="Add or edit your comment before confirming."
+                      className="min-h-24 bg-background text-sm"
+                      maxLength={1000}
+                      disabled={leadResolveSubmitting}
+                    />
+                    <p className="text-[10px] text-muted-foreground text-right tabular-nums">
+                      {leadResolveNote.length}/1000
+                    </p>
+                  </div>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={leadResolveSubmitting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className={
+                  leadResolveAlert?.action === 'decline'
+                    ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                    : ''
+                }
+                disabled={leadResolveSubmitting}
+                onClick={(e) => {
+                  e.preventDefault()
+                  void submitLeadResolve()
+                }}
+              >
+                {leadResolveSubmitting
+                  ? 'Working…'
+                  : leadResolveAlert?.action === 'approve'
+                    ? 'Yes, approve'
+                    : 'Yes, decline'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {view === 'tasks' ? (
           <Tabs defaultValue="all" className="w-full gap-4">
@@ -1263,7 +1831,7 @@ export default function AdminPage() {
                     className="h-10 w-full bg-background border-border"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Payout by monthly points tier (10+ pts) · Cap 100 pts = ₹{MAX_PAYOUT_INR}
+                    Payout by monthly points tier (10+ pts) · Cap {MONTHLY_POINT_CAP}+ pts = ₹{MAX_PAYOUT_INR}
                     {form.priority === 'urgent' && (
                       <span className="mt-1 block text-primary/90">
                         Urgent bonus +{URGENT_TASK_BONUS_POINTS} pts included in total (max 100).
@@ -1383,8 +1951,11 @@ export default function AdminPage() {
               <div className="pl-8 space-y-2">
                 <label className="text-sm font-medium text-foreground">Assign to</label>
                 <p className="text-xs text-muted-foreground">
-                  Leave as open pool so anyone can claim, or pick a member. Accounts and evangelist roles are not
-                  listed — they are not assigned program tasks.
+                  Leave as open pool so contributors can request assignment (an admin approves), or pick a member.
+                  Accounts and evangelist roles are not listed — they are not assigned program tasks.
+                  {currentUser.role === 'lead'
+                    ? ' As a lead, you can assign an open pool task to yourself without admin approval.'
+                    : ''}
                 </p>
                 <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
                   <SelectTrigger className="h-10 bg-background border-border">
@@ -1421,7 +1992,7 @@ export default function AdminPage() {
                   : 'Fill in all required fields (*) to create'
                 : taskForm?.mode === 'edit'
                   ? taskForm.taskId &&
-                      !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser)
+                      !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser, form)
                     ? 'Ready to submit to admin for approval'
                     : 'Ready to save changes'
                   : 'Ready to create'}
@@ -1438,7 +2009,7 @@ export default function AdminPage() {
                 >
                   <Pencil className="size-4" />{' '}
                   {taskForm.taskId &&
-                  !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser)
+                  !canActDirectOnTask(findTaskById(taskForm.taskId), currentUser, form)
                     ? 'Submit for approval'
                     : 'Save changes'}
                 </Button>
@@ -1599,6 +2170,11 @@ export default function AdminPage() {
                 <h4 className="text-sm font-semibold text-foreground mb-3">Task comments</h4>
                 <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} />
               </div>
+              {(currentUser.role === 'admin' || currentUser.role === 'lead') && (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4">
+                  <TaskComments taskId={(viewTask as any)._id ?? viewTask.id} audience="staff" />
+                </div>
+              )}
             </div>
 
             {/* Fixed footer so Close/Approve never get hidden */}

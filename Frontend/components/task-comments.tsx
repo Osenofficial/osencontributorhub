@@ -18,23 +18,30 @@ export type TaskComment = {
 export function TaskComments({
   taskId,
   className,
+  /** `staff` = lead & admin only; not shown to task assignee / contributors. */
+  audience = 'task',
 }: {
   taskId: string
   className?: string
+  audience?: 'task' | 'staff'
 }) {
   const [comments, setComments] = useState<TaskComment[]>([])
   const [loading, setLoading] = useState(true)
   const [body, setBody] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const isStaff = audience === 'staff'
 
   useEffect(() => {
     if (!taskId) return
     setLoading(true)
-    apiFetch<TaskComment[]>(`/dashboard/tasks/${taskId}/comments`)
+    const path = isStaff
+      ? `/dashboard/tasks/${taskId}/comments/internal`
+      : `/dashboard/tasks/${taskId}/comments`
+    apiFetch<TaskComment[]>(path)
       .then(setComments)
       .catch(() => setComments([]))
       .finally(() => setLoading(false))
-  }, [taskId])
+  }, [taskId, isStaff])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -43,7 +50,10 @@ export function TaskComments({
     setSubmitting(true)
     apiFetch<TaskComment>(`/dashboard/tasks/${taskId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ body: trimmed }),
+      body: JSON.stringify({
+        body: trimmed,
+        ...(isStaff ? { audience: 'staff' } : {}),
+      }),
     })
       .then((newComment) => {
         setComments((prev) => [...prev, newComment])
@@ -57,9 +67,17 @@ export function TaskComments({
 
   return (
     <div className={cn('space-y-3', className)}>
-      <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-        <MessageSquare className="size-3.5" /> Comments ({comments.length})
-      </h4>
+      <div className="space-y-1">
+        <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <MessageSquare className="size-3.5" />
+          {isStaff ? `Internal comments (${comments.length})` : `Comments (${comments.length})`}
+        </h4>
+        {isStaff ? (
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Hidden from assignees—only leads and admins can read or post here.
+          </p>
+        ) : null}
+      </div>
       {loading ? (
         <p className="text-xs text-muted-foreground">Loading comments…</p>
       ) : (
@@ -71,7 +89,10 @@ export function TaskComments({
               comments.map((c) => (
                 <div
                   key={c._id}
-                  className="rounded-xl border border-border bg-muted p-3 text-xs"
+                  className={cn(
+                    'rounded-xl border p-3 text-xs',
+                    isStaff ? 'border-amber-500/25 bg-amber-500/[0.06]' : 'border-border bg-muted',
+                  )}
                 >
                   <div className="flex items-start gap-3">
                     <AvatarCircle
@@ -103,7 +124,7 @@ export function TaskComments({
           </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
             <Textarea
-              placeholder="Add a comment…"
+              placeholder={isStaff ? 'Add an internal note (lead & admin only)…' : 'Add a comment…'}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               className="min-h-[72px] resize-none text-sm"

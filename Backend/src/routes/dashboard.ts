@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Router } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { Task } from "../models/Task";
@@ -5,10 +6,52 @@ import { Notification } from "../models/Notification";
 import { User } from "../models/User";
 import { Comment } from "../models/Comment";
 import { Invoice } from "../models/Invoice";
+import { PayoutRequest } from "../models/PayoutRequest";
+import { ContributorPeriod } from "../models/ContributorPeriod";
+import { ensureActiveContributorPeriod } from "../lib/contributorPeriodService";
+import { getPayoutForPoints, MIN_POINTS_FOR_PAYOUT } from "../lib/payoutTiers";
+import { queueNotifyUserByEmail, queueNotifyUsersByRole } from "../lib/notifyEmail";
 
 export const dashboardRouter = Router();
 
 dashboardRouter.use(requireAuth);
+
+/** Completed points for one contributor cycle (same basis as GET /leaderboard for that period). */
+async function userPointsInContributorPeriod(
+  userId: mongoose.Types.ObjectId,
+  periodId: mongoose.Types.ObjectId,
+): Promise<number> {
+  const rows = await Task.aggregate<{ total: number }>([
+    {
+      $match: {
+        status: "completed",
+        contributorPeriod: periodId,
+        assignedTo: userId,
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$points" } } },
+  ]);
+  return rows[0]?.total ?? 0;
+}
+
+function canViewPayoutStage(role: string, doc: any): boolean {
+  if (role === "admin") return true;
+  if (role === "accounts")
+    return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(doc.status);
+  return false;
+}
+
+function canViewPayoutComments(userRole: string, doc: any, userId: string | null): boolean {
+  if (userRole === "admin") return true;
+  if (userRole === "accounts")
+    return ["pending_admin", "pending_accounts", "paid", "rejected"].includes(doc.status);
+  const ownerId = doc.submittedBy?._id?.toString?.() ?? doc.submittedBy?.toString?.();
+  return !!(ownerId && userId && ownerId === userId);
+}
+
+function canPostPayoutComment(userRole: string, doc: any, userId: string | null): boolean {
+  return canViewPayoutComments(userRole, doc, userId);
+}
 
 dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
   try {
@@ -23,6 +66,7 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
         .populate("assignedTo", "name email")
         .populate("createdBy", "name email")
         .populate("pendingAssignmentRequests.user", "name email")
+        .populate("contributorPeriod", "sequence label startedAt endedAt")
         .sort({ createdAt: -1 })
         .limit(500),
     ]);
@@ -52,6 +96,7 @@ dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
     }
 
     const pts = Math.min(100, Math.max(1, parseInt(String(points)) || 10));
+    const period = await ensureActiveContributorPeriod(userId);
     const task = await Task.create({
       title,
       description: description || "",
@@ -61,6 +106,7 @@ dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
       points: pts,
       assignedTo: userId,
       createdBy: userId,
+      contributorPeriod: period._id,
       status: "submitted",
       submission: {
         githubLink: githubLink || "",
@@ -119,6 +165,7 @@ dashboardRouter.get("/tasks", async (req: AuthRequest, res, next) => {
       .populate("assignedTo", "name email")
       .populate("createdBy", "name email")
       .populate("pendingAssignmentRequests.user", "name email")
+      .populate("contributorPeriod", "sequence label startedAt endedAt")
       .sort({ createdAt: -1 });
     res.json(tasks);
   } catch (err) {
@@ -126,15 +173,21 @@ dashboardRouter.get("/tasks", async (req: AuthRequest, res, next) => {
   }
 });
 
-/** Claim an open pool task — only admin/lead (instant). Contributors use POST .../request-assignment. */
+/** Claim an open pool task — admin only (instant). Leads and contributors use POST .../request-assignment; an admin approves. */
 dashboardRouter.post("/tasks/:id/claim", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
     const role = req.user!.role;
-    if (!["admin", "lead"].includes(role)) {
+    if (role === "lead") {
       return res.status(403).json({
         message:
-          "Contributors must request assignment. Use “Request assignment” — an admin or lead will approve.",
+          "Leads cannot claim pool tasks directly. Use Request assignment — an admin must approve who gets the task.",
+      });
+    }
+    if (role !== "admin") {
+      return res.status(403).json({
+        message:
+          "Contributors must request assignment. Use “Request assignment” — an admin will approve.",
       });
     }
     const task = await Task.findById(req.params.id);
@@ -172,14 +225,14 @@ dashboardRouter.post("/tasks/:id/claim", async (req: AuthRequest, res, next) => 
   }
 });
 
-/** Contributor asks to be assigned to an open pool task — admin/lead approves in Admin panel. */
+/** Ask to be assigned to an open pool task — admin approves in Admin panel (leads use the same flow as contributors). */
 dashboardRouter.post("/tasks/:id/request-assignment", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
     const role = req.user!.role;
-    if (["admin", "lead"].includes(role)) {
+    if (role === "admin") {
       return res.status(400).json({
-        message: "Use Claim to assign yourself instantly, or manage tasks from the Admin panel.",
+        message: "Use Claim to assign yourself instantly from the task feed, or manage tasks from the Admin panel.",
       });
     }
 
@@ -211,14 +264,16 @@ dashboardRouter.post("/tasks/:id/request-assignment", async (req: AuthRequest, r
     await task.save();
 
     const requesterName = req.user!.name || "A contributor";
-    const managers = await User.find({ role: { $in: ["admin", "lead"] } }).select("_id");
-    for (const m of managers) {
+    const assignReqMsg = `${requesterName} wants to work on "${task.title}"`;
+    const admins = await User.find({ role: "admin" }).select("_id");
+    for (const a of admins) {
       await Notification.create({
-        user: m._id,
+        user: a._id,
         title: "Assignment request",
-        message: `${requesterName} wants to work on "${task.title}"`,
+        message: assignReqMsg,
       });
     }
+    queueNotifyUsersByRole("admin", "Assignment request", assignReqMsg);
 
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
@@ -374,7 +429,35 @@ dashboardRouter.get("/tasks/:id/comments", async (req: AuthRequest, res, next) =
     if (!canAccess) {
       return res.status(403).json({ message: "You do not have access to this task" });
     }
-    const comments = await Comment.find({ task: task._id })
+    const comments = await Comment.find({
+      task: task._id,
+      audience: { $nin: ["staff"] },
+    })
+      .populate("author", "name email avatar")
+      .sort({ createdAt: 1 });
+    res.json(comments);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Lead & admin only — not visible to assignees/contributors on the task. */
+dashboardRouter.get("/tasks/:id/comments/internal", async (req: AuthRequest, res, next) => {
+  try {
+    if (!["admin", "lead"].includes(req.user!.role)) {
+      return res.status(403).json({ message: "Internal comments are only visible to leads and admins" });
+    }
+    const task = await Task.findById(req.params.id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email");
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    const canAccess = canViewTaskComments(req.user!._id, req.user!.role, task);
+    if (!canAccess) {
+      return res.status(403).json({ message: "You do not have access to this task" });
+    }
+    const comments = await Comment.find({ task: task._id, audience: "staff" })
       .populate("author", "name email avatar")
       .sort({ createdAt: 1 });
     res.json(comments);
@@ -386,8 +469,14 @@ dashboardRouter.get("/tasks/:id/comments", async (req: AuthRequest, res, next) =
 dashboardRouter.post("/tasks/:id/comments", async (req: AuthRequest, res, next) => {
   try {
     const { body } = req.body;
+    const audienceRaw = (req.body as { audience?: unknown }).audience;
+    const audience =
+      audienceRaw === "staff" ? "staff" : "task";
     if (!body || typeof body !== "string" || !body.trim()) {
       return res.status(400).json({ message: "Comment body is required" });
+    }
+    if (audience === "staff" && !["admin", "lead"].includes(req.user!.role)) {
+      return res.status(403).json({ message: "Only leads and admins can post internal comments" });
     }
     const task = await Task.findById(req.params.id)
       .populate("assignedTo", "name email")
@@ -406,8 +495,14 @@ dashboardRouter.post("/tasks/:id/comments", async (req: AuthRequest, res, next) 
       task: task._id,
       author: req.user!._id,
       body: body.trim().slice(0, 2000),
+      audience,
     });
     const populated = await Comment.findById(comment._id).populate("author", "name email avatar");
+
+    // Internal thread: do not notify contributors (assignee / task creator).
+    if (audience === "staff") {
+      return res.status(201).json(populated);
+    }
 
     // Notify the other party: if assignee commented, notify createdBy; if admin/lead or createdBy commented, notify assignee
     const assigneeId = (task.assignedTo as any)?._id ?? task.assignedTo;
@@ -476,10 +571,49 @@ dashboardRouter.post("/notifications/:id/read", async (req: AuthRequest, res, ne
   }
 });
 
-dashboardRouter.get("/leaderboard", async (_req: AuthRequest, res, next) => {
+dashboardRouter.get("/contributor-periods", async (_req: AuthRequest, res, next) => {
   try {
+    await ensureActiveContributorPeriod();
+    const periods = await ContributorPeriod.find().sort({ sequence: -1 }).limit(48).lean();
+    res.json({
+      periods: periods.map((p) => ({
+        _id: p._id,
+        sequence: p.sequence,
+        label: p.label,
+        startedAt: p.startedAt,
+        endedAt: p.endedAt,
+        isActive: p.endedAt == null,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/leaderboard", async (req: AuthRequest, res, next) => {
+  try {
+    const raw = (req.query as { periodId?: unknown }).periodId;
+    let periodDoc: InstanceType<typeof ContributorPeriod> | null = null;
+
+    if (raw != null && String(raw).trim() !== "" && mongoose.isValidObjectId(String(raw))) {
+      periodDoc = await ContributorPeriod.findById(String(raw));
+      if (!periodDoc) {
+        return res.status(404).json({ message: "Contributor period not found" });
+      }
+    } else {
+      periodDoc = await ensureActiveContributorPeriod();
+    }
+
+    const periodOid = new mongoose.Types.ObjectId(String(periodDoc._id));
+
     const leaderboard = await Task.aggregate([
-      { $match: { status: "completed" } },
+      {
+        $match: {
+          status: "completed",
+          contributorPeriod: periodOid,
+          assignedTo: { $exists: true, $ne: null },
+        },
+      },
       {
         $group: {
           _id: "$assignedTo",
@@ -488,7 +622,7 @@ dashboardRouter.get("/leaderboard", async (_req: AuthRequest, res, next) => {
         },
       },
       { $sort: { totalPoints: -1 } },
-      { $limit: 20 },
+      { $limit: 100 },
       {
         $lookup: {
           from: "users",
@@ -532,7 +666,17 @@ dashboardRouter.get("/leaderboard", async (_req: AuthRequest, res, next) => {
       };
     });
 
-    res.json(withAvatar);
+    res.json({
+      period: {
+        id: periodDoc._id,
+        sequence: periodDoc.sequence,
+        label: periodDoc.label,
+        startedAt: periodDoc.startedAt,
+        endedAt: periodDoc.endedAt,
+        isActive: periodDoc.endedAt == null,
+      },
+      leaderboard: withAvatar,
+    });
   } catch (err) {
     next(err);
   }
@@ -687,7 +831,7 @@ dashboardRouter.get("/report/export-csv", async (req: AuthRequest, res, next) =>
   }
 });
 
-// ----- Invoices (Travel Reimbursement) -----
+// ----- Invoices (travel reimbursement only; tier payouts use /payout-requests) -----
 const INVOICE_MAX_AMOUNT = 1000;
 
 /** Roles that cannot submit reimbursements (reviewers / system only). */
@@ -722,7 +866,7 @@ dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
       return res.status(403).json({ message: "Your role cannot submit travel reimbursements" });
     }
     const userId = req.user!._id;
-    const body = req.body;
+    const body = req.body as Record<string, unknown>;
 
     const totalAmountClaimed = Math.min(
       INVOICE_MAX_AMOUNT,
@@ -732,40 +876,42 @@ dashboardRouter.post("/invoices", async (req: AuthRequest, res, next) => {
       return res.status(400).json({ message: `Total amount cannot exceed ₹${INVOICE_MAX_AMOUNT}` });
     }
 
+    const payLegacy = String(body.paymentMethod || "upi");
     const invoice = await Invoice.create({
       submittedBy: userId,
-      fullName: (body.fullName || "").trim() || req.user!.name,
-      email: (body.email || "").trim().toLowerCase() || req.user!.email,
-      phone: (body.phone || "").trim(),
-      osenRole: body.osenRole || "evangelist",
-      eventName: (body.eventName || "").trim(),
-      eventDate: body.eventDate ? new Date(body.eventDate) : new Date(),
+      fullName: String(body.fullName ?? "").trim() || req.user!.name,
+      email: String(body.email ?? "").trim().toLowerCase() || req.user!.email,
+      phone: String(body.phone ?? "").trim(),
+      osenRole: String(body.osenRole ?? "evangelist"),
+      eventName: String(body.eventName ?? "").trim(),
+      eventDate: body.eventDate ? new Date(String(body.eventDate)) : new Date(),
       eventPreApproved: !!body.eventPreApproved,
-      roleAtEvent: (body.roleAtEvent || "").trim(),
+      roleAtEvent: String(body.roleAtEvent ?? "").trim(),
       totalAmountClaimed,
-      budgetBreakdown: (body.budgetBreakdown || "").trim(),
-      billsDriveLink: (body.billsDriveLink || "").trim(),
-      paymentMethod: body.paymentMethod || "upi",
-      upiId: body.paymentMethod === "upi" ? (body.upiId || "").trim() : undefined,
+      budgetBreakdown: String(body.budgetBreakdown ?? "").trim(),
+      billsDriveLink: String(body.billsDriveLink ?? "").trim(),
+      paymentMethod: payLegacy,
+      upiId: payLegacy === "upi" ? String(body.upiId ?? "").trim() : undefined,
       bankAccountHolderName:
-        body.paymentMethod === "bank_transfer" ? (body.bankAccountHolderName || "").trim() : undefined,
+        payLegacy === "bank_transfer" ? String(body.bankAccountHolderName ?? "").trim() : undefined,
       bankAccountNumber:
-        body.paymentMethod === "bank_transfer" ? (body.bankAccountNumber || "").trim() : undefined,
-      bankIfscCode:
-        body.paymentMethod === "bank_transfer" ? (body.bankIfscCode || "").trim() : undefined,
-      notes: (body.notes || "").trim() || undefined,
+        payLegacy === "bank_transfer" ? String(body.bankAccountNumber ?? "").trim() : undefined,
+      bankIfscCode: payLegacy === "bank_transfer" ? String(body.bankIfscCode ?? "").trim() : undefined,
+      notes: String(body.notes ?? "").trim() || undefined,
       confirmationChecked: !!body.confirmationChecked,
     });
 
+    const invMsg = `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`;
     const adminUsers = await User.find({ role: "admin" }).select("_id");
     const notifyIds = adminUsers.map((u) => u._id);
     for (const id of notifyIds) {
       await Notification.create({
         user: id,
         title: "New travel reimbursement submitted",
-        message: `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`,
+        message: invMsg,
       });
     }
+    queueNotifyUsersByRole("admin", "New travel reimbursement submitted", invMsg);
 
     res.status(201).json(invoice);
   } catch (err) {
@@ -1012,6 +1158,10 @@ dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
 
       await invoice.save();
 
+      const invSubmitterMsg =
+        action === "approved"
+          ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) is approved. Accounts will review next.`
+          : `Your reimbursement for "${invoice.eventName}" was rejected by admin.${notes ? ` Notes: ${notes}` : ""}`;
       // Notify the submitter
       await Notification.create({
         user: invoice.submittedBy,
@@ -1019,22 +1169,26 @@ dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
           action === "approved"
             ? "Admin approved travel reimbursement"
             : "Admin rejected travel reimbursement",
-        message:
-          action === "approved"
-            ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) is approved. Accounts will review next.`
-            : `Your reimbursement for "${invoice.eventName}" was rejected by admin.${notes ? ` Notes: ${notes}` : ""}`,
+        message: invSubmitterMsg,
       });
+      queueNotifyUserByEmail(
+        invoice.submittedBy,
+        action === "approved" ? "Travel reimbursement approved by admin" : "Travel reimbursement rejected by admin",
+        invSubmitterMsg,
+      );
 
       // Notify all accounts users when admin approves
       if (action === "approved") {
+        const accMsg = `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`;
         const accountsUsers = await User.find({ role: "accounts" }).select("_id");
         for (const u of accountsUsers) {
           await Notification.create({
             user: u._id,
             title: "Invoice approved by admin",
-            message: `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`,
+            message: accMsg,
           });
         }
+        queueNotifyUsersByRole("accounts", "Invoice approved by admin", accMsg);
       }
 
       const updated = await Invoice.findById(invoice._id)
@@ -1064,14 +1218,20 @@ dashboardRouter.patch("/invoices/:id", async (req: AuthRequest, res, next) => {
 
       await invoice.save();
 
+      const invAcctMsg =
+        action === "paid"
+          ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) has been marked as paid.`
+          : `Your reimbursement for "${invoice.eventName}" was rejected by accounts.${notes ? ` Notes: ${notes}` : ""}`;
       await Notification.create({
         user: invoice.submittedBy,
         title: action === "paid" ? "Reimbursement paid" : "Reimbursement rejected by accounts",
-        message:
-          action === "paid"
-            ? `Your reimbursement for "${invoice.eventName}" (₹${invoice.totalAmountClaimed}) has been marked as paid.`
-            : `Your reimbursement for "${invoice.eventName}" was rejected by accounts.${notes ? ` Notes: ${notes}` : ""}`,
+        message: invAcctMsg,
       });
+      queueNotifyUserByEmail(
+        invoice.submittedBy,
+        action === "paid" ? "Reimbursement paid" : "Reimbursement rejected by accounts",
+        invAcctMsg,
+      );
 
       const updated = await Invoice.findById(invoice._id)
         .populate("submittedBy", "name email role")
@@ -1152,6 +1312,413 @@ dashboardRouter.post("/invoices/:id/comments", async (req: AuthRequest, res, nex
     await invoice.save();
 
     const updated = await Invoice.findById(invoice._id).populate("comments.author", "name email avatar role");
+    res.status(201).json((updated as any).comments?.slice(-1)?.[0] ?? null);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----- Points payout requests (tracking-only listing; submit from /points-payout) -----
+dashboardRouter.get("/payout-requests/meta", async (req: AuthRequest, res, next) => {
+  try {
+    if (!canRaiseInvoice(req.user!.role)) {
+      return res.status(403).json({ message: "Your role cannot submit points payout requests" });
+    }
+    await ensureActiveContributorPeriod();
+    const rawPid = String((req.query as { contributorPeriodId?: unknown }).contributorPeriodId ?? "").trim();
+    let periodDoc: InstanceType<typeof ContributorPeriod> | null = null;
+    if (rawPid && mongoose.isValidObjectId(rawPid)) {
+      periodDoc = await ContributorPeriod.findById(rawPid);
+    }
+    if (!periodDoc) {
+      periodDoc = await ensureActiveContributorPeriod();
+    }
+    const periodOid = new mongoose.Types.ObjectId(String(periodDoc._id));
+    const points = await userPointsInContributorPeriod(req.user!._id, periodOid);
+    const { amount, tierLabel } = getPayoutForPoints(points, periodDoc.sequence);
+    const periods = await ContributorPeriod.find().sort({ sequence: -1 }).limit(48).lean();
+    const active = periods.find((p) => p.endedAt == null) ?? periods[0];
+    res.json({
+      fullName: req.user!.name || "",
+      email: req.user!.email || "",
+      position: (req.user!.position || "").trim(),
+      points,
+      requestedPayoutINR: amount,
+      tierLabel,
+      eligible: amount > 0,
+      minPoints: MIN_POINTS_FOR_PAYOUT,
+      contributorPeriodId: String(periodDoc._id),
+      cycleLabel: periodDoc.label,
+      periods: periods.map((p) => ({
+        _id: p._id,
+        sequence: p.sequence,
+        label: p.label,
+        isActive: p.endedAt == null,
+      })),
+      suggestedPeriodId: active?._id ? String(active._id) : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.post("/payout-requests", async (req: AuthRequest, res, next) => {
+  try {
+    if (!canRaiseInvoice(req.user!.role)) {
+      return res.status(403).json({ message: "Your role cannot submit points payout requests" });
+    }
+    const userId = req.user!._id;
+    const body = req.body as Record<string, unknown>;
+
+    const periodId = String(body.contributorPeriodId ?? "").trim();
+    if (!periodId || !mongoose.isValidObjectId(periodId)) {
+      return res.status(400).json({ message: "contributorPeriodId is required" });
+    }
+    const period = await ContributorPeriod.findById(periodId);
+    if (!period) {
+      return res.status(400).json({ message: "Contributor period not found" });
+    }
+
+    const periodOid = new mongoose.Types.ObjectId(String(period._id));
+    const points = await userPointsInContributorPeriod(userId, periodOid);
+    const { amount, tierLabel } = getPayoutForPoints(points, period.sequence);
+    if (amount <= 0) {
+      return res.status(400).json({
+        message: `You need at least ${MIN_POINTS_FOR_PAYOUT} completed points in ${period.label} to request a tier payout`,
+      });
+    }
+
+    const paymentMethod = body.paymentMethod === "bank_transfer" ? "bank_transfer" : "upi";
+    const phone = String(body.phone ?? "").trim();
+    if (!phone) {
+      return res.status(400).json({ message: "Phone is required" });
+    }
+    if (!body.confirmationChecked) {
+      return res.status(400).json({ message: "Please confirm the declaration" });
+    }
+
+    let upiId: string | undefined;
+    let bankAccountHolderName: string | undefined;
+    let bankAccountNumber: string | undefined;
+    let bankIfscCode: string | undefined;
+    if (paymentMethod === "upi") {
+      upiId = String(body.upiId ?? "").trim();
+      if (!upiId) return res.status(400).json({ message: "UPI ID is required" });
+    } else {
+      bankAccountHolderName = String(body.bankAccountHolderName ?? "").trim();
+      bankAccountNumber = String(body.bankAccountNumber ?? "").trim();
+      bankIfscCode = String(body.bankIfscCode ?? "").trim();
+      if (!bankAccountHolderName || !bankAccountNumber || !bankIfscCode) {
+        return res.status(400).json({ message: "Bank account details are required" });
+      }
+    }
+
+    const doc = await PayoutRequest.create({
+      submittedBy: userId,
+      fullName: String(body.fullName ?? "").trim() || req.user!.name,
+      email: String(body.email ?? "").trim().toLowerCase() || req.user!.email,
+      phone,
+      pointsAtSubmit: points,
+      contributorPeriod: period._id,
+      cycleLabel: period.label,
+      cycleSequence: period.sequence,
+      requestedPayoutINR: amount,
+      tierLabel,
+      paymentMethod,
+      upiId,
+      bankAccountHolderName,
+      bankAccountNumber,
+      bankIfscCode,
+      notes: String(body.notes ?? "").trim() || undefined,
+      confirmationChecked: true,
+    });
+
+    const payoutNewMsg = `${doc.fullName} – ${doc.cycleLabel} – ${doc.pointsAtSubmit} pts – ₹${doc.requestedPayoutINR}`;
+    const adminUsers = await User.find({ role: "admin" }).select("_id");
+    for (const id of adminUsers) {
+      await Notification.create({
+        user: id._id,
+        title: "New points payout request",
+        message: payoutNewMsg,
+      });
+    }
+    queueNotifyUsersByRole("admin", "New points payout request", payoutNewMsg);
+
+    const populated = await PayoutRequest.findById(doc._id)
+      .populate("submittedBy", "name email role")
+      .populate("contributorPeriod", "sequence label startedAt endedAt");
+    res.status(201).json(populated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/payout-requests/tracking", async (req: AuthRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    const userId = req.user!._id;
+    const qs = req.query as { status?: string; name?: string; dateFrom?: string; dateTo?: string };
+
+    const statusFilter = String(qs.status || "all");
+    const nameQ = String(qs.name || "").trim();
+    const dateFromStr = String(qs.dateFrom || "").trim();
+    const dateToStr = String(qs.dateTo || "").trim();
+
+    const andParts: Record<string, unknown>[] = [];
+    if (role !== "admin" && role !== "accounts") {
+      andParts.push({ submittedBy: userId });
+    }
+    if (statusFilter !== "all" && ["pending_admin", "pending_accounts", "paid", "rejected"].includes(statusFilter)) {
+      andParts.push({ status: statusFilter });
+    }
+
+    const parseDayStart = (s: string): Date | null => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      if (!m) return null;
+      return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0));
+    };
+    const parseDayEnd = (s: string): Date | null => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      if (!m) return null;
+      return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999));
+    };
+
+    if (dateFromStr || dateToStr) {
+      const range: { $gte?: Date; $lte?: Date } = {};
+      if (dateFromStr) {
+        const d = parseDayStart(dateFromStr);
+        if (d) range.$gte = d;
+      }
+      if (dateToStr) {
+        const d = parseDayEnd(dateToStr);
+        if (d) range.$lte = d;
+      }
+      if (Object.keys(range).length > 0) {
+        andParts.push({ createdAt: range });
+      }
+    }
+
+    if (nameQ) {
+      const esc = nameQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rx = new RegExp(esc, "i");
+      const matchingUserIds = await User.find({
+        $or: [{ name: rx }, { email: rx }],
+      }).distinct("_id");
+      andParts.push({
+        $or: [{ fullName: rx }, { email: rx }, { cycleLabel: rx }, { submittedBy: { $in: matchingUserIds } }],
+      });
+    }
+
+    const filter: Record<string, unknown> =
+      andParts.length === 0 ? {} : andParts.length === 1 ? andParts[0]! : { $and: andParts };
+
+    const list = await PayoutRequest.find(filter)
+      .populate("submittedBy", "name email role")
+      .populate("contributorPeriod", "_id sequence label")
+      .populate("adminReviewedBy", "name email role")
+      .populate("accountsReviewedBy", "name email role")
+      .sort({ createdAt: -1 });
+    res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/payout-requests/:id", async (req: AuthRequest, res, next) => {
+  try {
+    const doc = await PayoutRequest.findById(req.params.id)
+      .populate("submittedBy", "name email role")
+      .populate("contributorPeriod", "sequence label startedAt endedAt")
+      .populate("adminReviewedBy", "name email role")
+      .populate("accountsReviewedBy", "name email role");
+    if (!doc) {
+      return res.status(404).json({ message: "Payout request not found" });
+    }
+    const userId = req.user!._id.toString();
+    const isOwner = doc.submittedBy._id.toString() === userId;
+    if (isOwner) {
+      return res.json(doc);
+    }
+    if (req.user!.role === "admin") {
+      return res.json(doc);
+    }
+    if (req.user!.role === "accounts" && canViewPayoutStage(req.user!.role, doc)) {
+      return res.json(doc);
+    }
+    return res.status(403).json({ message: "You do not have access to this payout request" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.patch("/payout-requests/:id", async (req: AuthRequest, res, next) => {
+  try {
+    const role = req.user!.role;
+    const doc = await PayoutRequest.findById(req.params.id);
+    if (!doc) {
+      return res.status(404).json({ message: "Payout request not found" });
+    }
+
+    const { action, reviewNotes } = req.body as { action?: string; reviewNotes?: unknown };
+    const notes = reviewNotes != null ? String(reviewNotes).trim() : undefined;
+
+    if (role === "admin") {
+      if (doc.status !== "pending_admin") {
+        return res.status(400).json({ message: "Request is not pending admin review" });
+      }
+      if (!action || !["approved", "rejected"].includes(action)) {
+        return res.status(400).json({ message: "action must be approved or rejected" });
+      }
+      doc.adminReviewedBy = req.user!._id;
+      doc.adminReviewedAt = new Date();
+      if (notes) doc.adminReviewNotes = notes;
+      if (action === "approved") {
+        doc.status = "pending_accounts";
+      } else {
+        doc.status = "rejected";
+      }
+      await doc.save();
+
+      const payoutAdminMsg =
+        action === "approved"
+          ? `Your points payout (${doc.cycleLabel}, ₹${doc.requestedPayoutINR}) is approved. Accounts will process next.`
+          : `Your points payout request was rejected by admin.${notes ? ` Notes: ${notes}` : ""}`;
+      await Notification.create({
+        user: doc.submittedBy,
+        title: action === "approved" ? "Points payout approved by admin" : "Points payout rejected by admin",
+        message: payoutAdminMsg,
+      });
+      queueNotifyUserByEmail(
+        doc.submittedBy,
+        action === "approved" ? "Points payout approved by admin" : "Points payout rejected by admin",
+        payoutAdminMsg,
+      );
+
+      if (action === "approved") {
+        const pAccMsg = `${doc.fullName} – ${doc.cycleLabel} – ₹${doc.requestedPayoutINR}`;
+        const accountsUsers = await User.find({ role: "accounts" }).select("_id");
+        for (const u of accountsUsers) {
+          await Notification.create({
+            user: u._id,
+            title: "Points payout approved — needs accounts",
+            message: pAccMsg,
+          });
+        }
+        queueNotifyUsersByRole("accounts", "Points payout approved — needs accounts", pAccMsg);
+      }
+
+      const updated = await PayoutRequest.findById(doc._id)
+        .populate("submittedBy", "name email role")
+        .populate("contributorPeriod", "sequence label startedAt endedAt")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role");
+      return res.json(updated);
+    }
+
+    if (role === "accounts") {
+      if (doc.status !== "pending_accounts") {
+        return res.status(400).json({ message: "Request is not pending accounts approval" });
+      }
+      if (!action || !["paid", "rejected"].includes(action)) {
+        return res.status(400).json({ message: "action must be paid or rejected" });
+      }
+      doc.accountsReviewedBy = req.user!._id;
+      doc.accountsReviewedAt = new Date();
+      if (notes) doc.accountsReviewNotes = notes;
+      if (action === "paid") {
+        doc.status = "paid";
+        doc.paidAt = new Date();
+      } else {
+        doc.status = "rejected";
+      }
+      await doc.save();
+
+      const payoutAcctMsg =
+        action === "paid"
+          ? `Your points payout (${doc.cycleLabel}, ₹${doc.requestedPayoutINR}) has been marked as paid.`
+          : `Your points payout was rejected by accounts.${notes ? ` Notes: ${notes}` : ""}`;
+      await Notification.create({
+        user: doc.submittedBy,
+        title: action === "paid" ? "Points payout marked paid" : "Points payout rejected by accounts",
+        message: payoutAcctMsg,
+      });
+      queueNotifyUserByEmail(
+        doc.submittedBy,
+        action === "paid" ? "Points payout marked paid" : "Points payout rejected by accounts",
+        payoutAcctMsg,
+      );
+
+      const updated = await PayoutRequest.findById(doc._id)
+        .populate("submittedBy", "name email role")
+        .populate("contributorPeriod", "sequence label startedAt endedAt")
+        .populate("adminReviewedBy", "name email role")
+        .populate("accountsReviewedBy", "name email role");
+      return res.json(updated);
+    }
+
+    return res.status(403).json({ message: "Forbidden" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.get("/payout-requests/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const doc = await PayoutRequest.findById(req.params.id)
+      .populate("submittedBy", "_id")
+      .populate({
+        path: "comments.author",
+        select: "name email avatar role",
+        model: "User",
+      });
+    if (!doc) {
+      return res.status(404).json({ message: "Payout request not found" });
+    }
+    const userId = req.user?._id?.toString?.() ?? null;
+    const allowed = canViewPayoutComments(req.user!.role, doc, userId);
+    if (!allowed) {
+      return res.status(403).json({ message: "You do not have access to these comments" });
+    }
+    const raw = (doc as any).comments;
+    const list = Array.isArray(raw) ? raw : [];
+    res.json(
+      list.map((c: any) => ({
+        _id: c._id,
+        author: c.author,
+        role: c.role,
+        body: c.body,
+        createdAt: c.createdAt,
+      }))
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+dashboardRouter.post("/payout-requests/:id/comments", async (req: AuthRequest, res, next) => {
+  try {
+    const doc = await PayoutRequest.findById(req.params.id).populate("submittedBy", "_id");
+    if (!doc) {
+      return res.status(404).json({ message: "Payout request not found" });
+    }
+    const userId = req.user?._id?.toString?.() ?? null;
+    if (!canPostPayoutComment(req.user!.role, doc, userId)) {
+      return res.status(403).json({ message: "You do not have permission to comment on this request" });
+    }
+    const { body } = req.body as { body?: unknown };
+    if (!body || typeof body !== "string" || !body.trim()) {
+      return res.status(400).json({ message: "Comment body is required" });
+    }
+    const comment = {
+      author: req.user!._id,
+      role: req.user!.role,
+      body: body.trim().slice(0, 2000),
+      createdAt: new Date(),
+    };
+    (doc as any).comments = Array.isArray((doc as any).comments) ? (doc as any).comments : [];
+    (doc as any).comments.push(comment);
+    await doc.save();
+    const updated = await PayoutRequest.findById(doc._id).populate("comments.author", "name email avatar role");
     res.status(201).json((updated as any).comments?.slice(-1)?.[0] ?? null);
   } catch (err) {
     next(err);

@@ -104,7 +104,9 @@ export default function AllTasksPage() {
   const [scrollAssigneeSectionTaskId, setScrollAssigneeSectionTaskId] = useState<string | null>(null)
   const assigneeActionsRef = useRef<HTMLDivElement>(null)
 
-  const isManager = currentUser?.role === 'admin' || currentUser?.role === 'lead'
+  const isAdminUser = currentUser?.role === 'admin'
+  const canSeeStaffThread =
+    currentUser?.role === 'admin' || currentUser?.role === 'lead'
 
   useEffect(() => {
     if (!viewTask || !scrollAssigneeSectionTaskId) return
@@ -282,9 +284,9 @@ export default function AllTasksPage() {
     const createdBy = task.createdBy
     const assignee = task.assignedTo
     const isPool = task.status === 'todo' && !task.assignedTo
-    const canClaimPool = isPool && Boolean(currentUser?.id) && isManager
+    const canClaimPool = isPool && Boolean(currentUser?.id) && isAdminUser
     const canRequest =
-      isPool && Boolean(currentUser?.id) && !isManager && !userHasPendingAssignment(task, currentUser?.id)
+      isPool && Boolean(currentUser?.id) && !isAdminUser && !userHasPendingAssignment(task, currentUser?.id)
     const pendingMine = isPool && userHasPendingAssignment(task, currentUser?.id)
     const assigneeId = assignee?._id ?? assignee
     const taskAssignedToMe =
@@ -316,6 +318,11 @@ export default function AllTasksPage() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={task.category} type="category" />
             <StatusBadge value={task.status} type="status" />
+            {task.contributorPeriod && (
+              <span className="inline-flex items-center rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-800 dark:text-violet-200">
+                {(task.contributorPeriod as { label?: string }).label ?? 'Cycle'}
+              </span>
+            )}
             {isPool && (
               <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-200">
                 <UserCircle className="size-3" />
@@ -448,8 +455,9 @@ export default function AllTasksPage() {
                   </div>
                   <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
                     Boxes show each task. Open pool: use{' '}
-                    <strong className="font-medium text-foreground">Request</strong> (admin approves) or{' '}
-                    <strong className="font-medium text-foreground">Claim</strong> if you&apos;re an admin or lead.
+                    <strong className="font-medium text-foreground">Request</strong> (an admin approves who gets the
+                    task) or <strong className="font-medium text-foreground">Claim</strong> if you&apos;re an{' '}
+                    <strong className="font-medium text-foreground">admin</strong>.
                   </p>
                 </div>
               </div>
@@ -826,9 +834,16 @@ export default function AllTasksPage() {
               <p className="text-sm font-semibold text-foreground">Task comments</p>
               <TaskComments taskId={vt?._id} />
             </div>
+            {canSeeStaffThread && (vt?._id ?? vt?.id) ? (
+              <div className="border-t border-border/50 pt-4">
+                <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] p-3">
+                  <TaskComments taskId={String(vt._id ?? vt.id)} audience="staff" />
+                </div>
+              </div>
+            ) : null}
             {vt && vtPool && currentUser?.id && (
               <div className="flex flex-col gap-2 border-t border-border/50 pt-4 sm:flex-row sm:items-center">
-                {isManager ? (
+                {isAdminUser ? (
                   <Button
                     size="sm"
                     className="gap-1.5"
@@ -850,9 +865,9 @@ export default function AllTasksPage() {
                   </Button>
                 )}
                 <p className="text-[11px] text-muted-foreground">
-                  {isManager
+                  {isAdminUser
                     ? 'Assign this pool task to yourself to start working.'
-                    : 'Ask an admin or lead to approve you for this task.'}
+                    : 'An admin will approve or decline your request.'}
                 </p>
               </div>
             )}

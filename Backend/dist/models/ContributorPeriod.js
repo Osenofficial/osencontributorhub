@@ -33,28 +33,15 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LeadActionRequest = void 0;
+exports.ContributorPeriod = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
-const LeadActionRequestSchema = new mongoose_1.Schema({
-    type: {
-        type: String,
-        enum: ["edit_task", "delete_task", "reject_submission", "approve_submission"],
-        required: true,
-    },
-    task: { type: mongoose_1.Schema.Types.ObjectId, ref: "Task", required: true, index: true },
-    requestedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
-    status: {
-        type: String,
-        enum: ["pending", "approved", "declined"],
-        default: "pending",
-        index: true,
-    },
-    payload: { type: mongoose_1.Schema.Types.Mixed },
-    reason: { type: String, trim: true, maxlength: 2000 },
-    resolvedAt: { type: Date },
-    resolvedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User" },
-    resolutionNote: { type: String, trim: true, maxlength: 1000 },
+const ContributorPeriodSchema = new mongoose_1.Schema({
+    sequence: { type: Number, required: true, unique: true },
+    label: { type: String, required: true, trim: true },
+    startedAt: { type: Date, required: true, default: Date.now },
+    endedAt: { type: Date, default: null },
+    startedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", default: undefined },
 }, { timestamps: true });
-LeadActionRequestSchema.index({ status: 1, createdAt: -1 });
-exports.LeadActionRequest = mongoose_1.default.models.LeadActionRequest ||
-    mongoose_1.default.model("LeadActionRequest", LeadActionRequestSchema);
+ContributorPeriodSchema.index({ endedAt: 1 });
+exports.ContributorPeriod = mongoose_1.default.models.ContributorPeriod ||
+    mongoose_1.default.model("ContributorPeriod", ContributorPeriodSchema);

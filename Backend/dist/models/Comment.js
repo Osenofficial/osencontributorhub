@@ -39,6 +39,12 @@ const CommentSchema = new mongoose_1.Schema({
     task: { type: mongoose_1.Schema.Types.ObjectId, ref: "Task", required: true, index: true },
     author: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
     body: { type: String, required: true, trim: true, maxlength: 2000 },
+    audience: {
+        type: String,
+        enum: ["task", "staff"],
+        default: "task",
+        index: true,
+    },
 }, { timestamps: { createdAt: true, updatedAt: false } });
 CommentSchema.index({ task: 1, createdAt: 1 });
 exports.Comment = mongoose_1.default.models.Comment || mongoose_1.default.model("Comment", CommentSchema);

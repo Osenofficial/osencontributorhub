@@ -8,7 +8,8 @@ import { BadgeChip } from '@/components/badge-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { Progress } from '@/components/ui/progress'
 import { useApp } from '@/lib/app-context'
-import { MONTHLY_POINT_CAP, getPayoutForPoints, BADGES } from '@/lib/data'
+import { getPayoutForPoints, BADGES, pointsProgressPercent, monthlyPointCapForCycle } from '@/lib/data'
+import { type LeaderboardResponse, leaderboardUrl } from '@/lib/contributor-cycle'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,7 @@ export default function ProfilePage() {
   const { currentUser, refreshUser } = useApp()
   const [tasks, setTasks] = useState<any[]>([])
   const [leaderboard, setLeaderboard] = useState<any[]>([])
+  const [activeCycleSequence, setActiveCycleSequence] = useState<number | undefined>(undefined)
   const [editOpen, setEditOpen] = useState(false)
   const [position, setPosition] = useState('')
   const [selectedInterests, setSelectedInterests] = useState<string[]>([])
@@ -36,9 +38,15 @@ export default function ProfilePage() {
     apiFetch<any[]>('/dashboard/tasks')
       .then(setTasks)
       .catch(() => setTasks([]))
-    apiFetch<any[]>('/dashboard/leaderboard')
-      .then(setLeaderboard)
-      .catch(() => setLeaderboard([]))
+    apiFetch<LeaderboardResponse>(leaderboardUrl(null))
+      .then((data) => {
+        setLeaderboard(Array.isArray(data.leaderboard) ? data.leaderboard : [])
+        setActiveCycleSequence(data.period?.sequence)
+      })
+      .catch(() => {
+        setLeaderboard([])
+        setActiveCycleSequence(undefined)
+      })
   }, [currentUser?.id])
 
   const INTEREST_OPTIONS = [
@@ -56,8 +64,10 @@ export default function ProfilePage() {
   const myTasks = tasks
   const completed = myTasks.filter((t) => t.status === 'completed')
   const inProgress = myTasks.filter((t) => t.status === 'in_progress')
-  const myRank = leaderboard.findIndex((u) => u.userId === currentUser?.id) + 1
-  const pointsPercent = Math.round(((currentUser?.points ?? 0) / MONTHLY_POINT_CAP) * 100)
+  const myRank =
+    leaderboard.findIndex((u) => String(u.userId ?? u.id) === String(currentUser?.id)) + 1
+  const monthlyCap = monthlyPointCapForCycle(activeCycleSequence)
+  const pointsPercent = pointsProgressPercent(currentUser?.points ?? 0, monthlyCap)
 
   const categoryBreakdown = myTasks.reduce<Record<string, number>>((acc, task) => {
     if (task.status === 'completed') {
@@ -168,7 +178,7 @@ export default function ProfilePage() {
               <div className="text-xs text-muted-foreground">total points</div>
               <div className="text-sm font-medium text-green-400 mt-1">
                 {(() => {
-                  const { amount, tierLabel } = getPayoutForPoints(currentUser?.points ?? 0)
+                  const { amount, tierLabel } = getPayoutForPoints(currentUser?.points ?? 0, activeCycleSequence)
                   return amount > 0 ? `Payout: ₹${amount} (${tierLabel})` : tierLabel
                 })()}
               </div>
@@ -244,7 +254,11 @@ export default function ProfilePage() {
             { label: 'Tasks Done', value: completed.length, color: 'text-green-400' },
             { label: 'In Progress', value: inProgress.length, color: 'text-blue-400' },
             { label: 'Total Points', value: currentUser?.points ?? 0, color: 'text-primary' },
-            { label: 'Global Rank', value: myRank > 0 ? `#${myRank}` : '—', color: 'text-yellow-400' },
+            {
+              label: 'Rank (current cycle)',
+              value: myRank > 0 ? `#${myRank}` : '—',
+              color: 'text-yellow-400',
+            },
           ].map((stat) => (
             <div key={stat.label} className="glass rounded-xl border p-4 text-center">
               <div className={cn('text-2xl font-bold', stat.color)}>{stat.value}</div>
@@ -256,12 +270,12 @@ export default function ProfilePage() {
         <div className="glass rounded-2xl border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold">Monthly Points Progress</h3>
-            <span className="font-mono text-sm text-primary">{currentUser?.points ?? 0} / {MONTHLY_POINT_CAP}</span>
+            <span className="font-mono text-sm text-primary">{currentUser?.points ?? 0} / {monthlyCap}</span>
           </div>
           <Progress value={pointsPercent} className="h-2.5 bg-muted" />
           <div className="flex justify-between mt-2 text-xs text-muted-foreground">
             <span>{pointsPercent}% of monthly cap reached</span>
-            <span>{MONTHLY_POINT_CAP - (currentUser?.points ?? 0)} pts to cap</span>
+            <span>{Math.max(0, monthlyCap - (currentUser?.points ?? 0))} pts to cap</span>
           </div>
         </div>
 

@@ -33,25 +33,19 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Invoice = void 0;
+exports.PayoutRequest = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
-const InvoiceSchema = new mongoose_1.Schema({
+const PayoutRequestSchema = new mongoose_1.Schema({
     submittedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     fullName: { type: String, required: true, trim: true },
     email: { type: String, required: true, trim: true, lowercase: true },
-    phone: { type: String, trim: true, default: "" },
-    osenRole: {
-        type: String,
-        enum: ["community_manager", "design_team", "video_editor", "evangelist", "ambassador_lead"],
-        required: true,
-    },
-    eventName: { type: String, required: true, trim: true },
-    eventDate: { type: Date, required: true },
-    eventPreApproved: { type: Boolean, required: true },
-    roleAtEvent: { type: String, required: true, trim: true },
-    totalAmountClaimed: { type: Number, required: true, min: 0, max: 5000 },
-    budgetBreakdown: { type: String, required: true, trim: true },
-    billsDriveLink: { type: String, required: true, trim: true },
+    phone: { type: String, required: true, trim: true },
+    pointsAtSubmit: { type: Number, required: true, min: 0 },
+    contributorPeriod: { type: mongoose_1.Schema.Types.ObjectId, ref: "ContributorPeriod", required: true, index: true },
+    cycleLabel: { type: String, required: true, trim: true },
+    cycleSequence: { type: Number, required: true },
+    requestedPayoutINR: { type: Number, required: true, min: 0, max: 5000 },
+    tierLabel: { type: String, required: true, trim: true },
     paymentMethod: { type: String, enum: ["upi", "bank_transfer"], required: true },
     upiId: { type: String, trim: true },
     bankAccountHolderName: { type: String, trim: true },
@@ -74,12 +68,12 @@ const InvoiceSchema = new mongoose_1.Schema({
     paidAt: { type: Date },
     comments: [
         {
-            author: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+            author: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
             role: { type: String, required: true, trim: true },
             body: { type: String, required: true, trim: true, maxlength: 2000 },
             createdAt: { type: Date, default: Date.now },
         },
     ],
 }, { timestamps: true });
-InvoiceSchema.index({ status: 1, createdAt: -1 });
-exports.Invoice = mongoose_1.default.models.Invoice || mongoose_1.default.model("Invoice", InvoiceSchema);
+PayoutRequestSchema.index({ status: 1, createdAt: -1 });
+exports.PayoutRequest = mongoose_1.default.models.PayoutRequest || mongoose_1.default.model("PayoutRequest", PayoutRequestSchema);
