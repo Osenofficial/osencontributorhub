@@ -4,13 +4,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isEmailSendingEnabled = isEmailSendingEnabled;
-exports.isMailSmtpConfigured = isMailSmtpConfigured;
 exports.isResendConfigured = isResendConfigured;
-exports.isOutboundMailConfigured = isOutboundMailConfigured;
+exports.isMailSmtpConfigured = isMailSmtpConfigured;
 exports.sendMail = sendMail;
 exports.logMailStartupStatus = logMailStartupStatus;
 const node_dns_1 = __importDefault(require("node:dns"));
 const nodemailer_1 = __importDefault(require("nodemailer"));
+const resend_1 = require("resend");
 // Run as soon as this module loads (before first SMTP connection). Render often has no IPv6 egress.
 if (typeof node_dns_1.default.setDefaultResultOrder === "function") {
     node_dns_1.default.setDefaultResultOrder("ipv4first");
@@ -26,22 +26,31 @@ function isEmailSendingEnabled() {
         .toLowerCase();
     return v === "true" || v === "1" || v === "yes" || v === "on";
 }
-/** SMTP credentials present (Nodemailer path). */
+/** Resend: API key + verified sender (see https://resend.com/domains). */
+function isResendConfigured() {
+    const key = String(process.env.RESEND_API_KEY || "").trim();
+    const from = getResendFromAddress();
+    return Boolean(key && from);
+}
+function getResendFromAddress() {
+    return String(process.env.RESEND_FROM || process.env.EMAIL_FROM || "").trim();
+}
 function isMailSmtpConfigured() {
     return Boolean(process.env.EMAIL_HOST?.trim() &&
         process.env.EMAIL_USER?.trim() &&
         process.env.EMAIL_PASSWORD?.trim() &&
         process.env.EMAIL_FROM?.trim());
 }
-/** Resend API key present (HTTPS :443 — works on Render free tier where SMTP ports are blocked). */
-function isResendConfigured() {
-    return Boolean(process.env.RESEND_API_KEY?.trim());
-}
-/** Either Resend or full SMTP — enough to attempt outbound mail. */
-function isOutboundMailConfigured() {
-    return isResendConfigured() || isMailSmtpConfigured();
-}
 let transporter = null;
+let resendClient = null;
+function getResend() {
+    if (!isResendConfigured())
+        return null;
+    if (!resendClient) {
+        resendClient = new resend_1.Resend(String(process.env.RESEND_API_KEY).trim());
+    }
+    return resendClient;
+}
 function getTransporter() {
     if (!isMailSmtpConfigured())
         return null;
@@ -70,65 +79,49 @@ function getTransporter() {
     }
     return transporter;
 }
-async function sendViaResend(options) {
-    const apiKey = process.env.RESEND_API_KEY.trim();
-    const from = process.env.RESEND_FROM?.trim() || process.env.EMAIL_FROM?.trim();
-    if (!from) {
-        return { ok: false, error: "Set RESEND_FROM or EMAIL_FROM for Resend" };
-    }
-    const to = Array.isArray(options.to) ? options.to : [options.to];
-    const body = {
-        from,
-        to,
-        subject: options.subject,
-    };
-    if (options.html)
-        body.html = options.html;
-    if (options.text)
-        body.text = options.text;
-    if (!body.html && !body.text)
-        body.text = "";
-    try {
-        const res = await fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-        });
-        const raw = await res.text();
-        if (!res.ok) {
-            console.error("[mail] Resend failed:", res.status, raw);
-            return { ok: false, error: `Resend ${res.status}: ${raw.slice(0, 300)}` };
-        }
-        let id = "resend";
-        try {
-            const json = JSON.parse(raw);
-            if (json?.id)
-                id = json.id;
-        }
-        catch {
-            /* ignore */
-        }
-        return { ok: true, messageId: id };
-    }
-    catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error("[mail] Resend request failed:", msg);
-        return { ok: false, error: msg };
-    }
-}
 /**
- * Sends one email. Uses Resend (HTTPS) when RESEND_API_KEY is set — required on Render free tier
- * (outbound SMTP 25/465/587 is blocked). Otherwise uses Nodemailer SMTP.
+ * Sends one email. Prefers Resend when `RESEND_API_KEY` is set; otherwise SMTP (`EMAIL_*`).
+ * Respects ENABLE_EMAIL_NOTIFICATIONS. Safe to call from routes: failures return { ok: false } instead of throwing.
  */
 async function sendMail(options) {
     if (!isEmailSendingEnabled()) {
         return { ok: false, skipped: true, reason: "disabled" };
     }
-    if (isResendConfigured()) {
-        return sendViaResend(options);
+    const resend = getResend();
+    if (resend) {
+        const from = getResendFromAddress();
+        const replyToRaw = (options.replyTo ?? process.env.EMAIL_REPLY_TO)?.trim();
+        const replyTo = replyToRaw
+            ? replyToRaw.includes(",")
+                ? replyToRaw.split(",").map((s) => s.trim())
+                : replyToRaw
+            : undefined;
+        const hasHtml = Boolean(options.html && String(options.html).length > 0);
+        const hasText = options.text !== undefined && String(options.text).length > 0;
+        const payload = {
+            from,
+            to: options.to,
+            subject: options.subject,
+            ...(replyTo ? { replyTo } : {}),
+            ...(hasHtml ? { html: options.html } : {}),
+            ...(hasText ? { text: options.text } : {}),
+            ...(!hasHtml && !hasText ? { text: "" } : {}),
+        };
+        try {
+            const { data, error } = await resend.emails.send(payload);
+            if (error) {
+                const msg = error.message || String(error);
+                console.error("[mail] Resend send failed:", msg);
+                return { ok: false, error: msg };
+            }
+            const messageId = data?.id ? String(data.id) : "";
+            return { ok: true, messageId };
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error("[mail] Resend send failed:", msg);
+            return { ok: false, error: msg };
+        }
     }
     const transport = getTransporter();
     if (!transport) {
@@ -150,24 +143,25 @@ async function sendMail(options) {
     }
     catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[mail] send failed:", msg);
+        console.error("[mail] SMTP send failed:", msg);
         return { ok: false, error: msg };
     }
 }
-/** Log once at startup so you know if outbound mail is ready. */
+/** Log once at startup so you know if outbound email is ready. */
 function logMailStartupStatus() {
     const sending = isEmailSendingEnabled();
-    const configured = isOutboundMailConfigured();
-    if (!configured) {
-        console.log("[mail] Outbound not configured — set RESEND_API_KEY (+ RESEND_FROM or EMAIL_FROM), or full SMTP (EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM)");
+    const resendOk = isResendConfigured();
+    const smtpOk = isMailSmtpConfigured();
+    if (!resendOk && !smtpOk) {
+        console.log("[mail] Email not configured: set RESEND_API_KEY + RESEND_FROM (or EMAIL_FROM), or set EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM");
         return;
     }
     if (!sending) {
-        console.log("[mail] Outbound configured; sending disabled (set ENABLE_EMAIL_NOTIFICATIONS=true to send)");
+        console.log("[mail] Email provider ready; sending disabled (set ENABLE_EMAIL_NOTIFICATIONS=true to send)");
         return;
     }
-    if (isResendConfigured()) {
-        console.log("[mail] Resend API configured; outbound email enabled (HTTPS — OK on Render free tier)");
+    if (resendOk) {
+        console.log("[mail] Resend configured; outbound email enabled");
         return;
     }
     console.log("[mail] SMTP configured; outbound email enabled");
