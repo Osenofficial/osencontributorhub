@@ -8,7 +8,7 @@ export interface IPayoutRequest extends Document {
   fullName: string;
   email: string;
   phone: string;
-  /** Lifetime completed-task points at submission (server-verified). */
+  /** Completed-task points for the selected contributor cycle at submission (server-verified). */
   pointsAtSubmit: number;
   contributorPeriod: Types.ObjectId;
   cycleLabel: string;
