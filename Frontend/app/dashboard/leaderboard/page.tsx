@@ -213,7 +213,7 @@ export default function LeaderboardPage() {
               Points tier payout
             </p>
             <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-              Request a payout from your <strong>lifetime points</strong> tier for a contributor cycle. Travel
+              Request a payout from your <strong>cycle points</strong> tier for the selected contributor cycle. Travel
               reimbursements (events + bills) stay under{' '}
               <Link href="/dashboard/invoices" className="font-medium text-primary underline-offset-2 hover:underline">
                 Invoices
@@ -347,7 +347,7 @@ export default function LeaderboardPage() {
                   </div>
                   {user.badges?.length > 0 && (
                     <div className="mt-3 flex flex-wrap justify-center gap-1">
-                      {user.badges.slice(0, 2).map((b) => (
+                      {user.badges.slice(0, 2).map((b: any) => (
                         <BadgeChip key={b.id} badge={b} size="sm" />
                       ))}
                     </div>
