@@ -5,13 +5,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const node_dns_1 = __importDefault(require("node:dns"));
+const db_1 = require("./lib/db");
+const mail_1 = require("./lib/mail");
+const app_1 = require("./app");
 // Gmail and others expose IPv6 (AAAA). Many hosts (e.g. Render) have no IPv6 egress → ENETUNREACH on :587.
 if (typeof node_dns_1.default.setDefaultResultOrder === "function") {
     node_dns_1.default.setDefaultResultOrder("ipv4first");
 }
-const db_1 = require("./lib/db");
-const mail_1 = require("./lib/mail");
-const app_1 = require("./app");
 const PORT = process.env.PORT || 5000;
 async function start() {
     try {
