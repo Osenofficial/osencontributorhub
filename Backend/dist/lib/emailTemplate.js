@@ -49,6 +49,9 @@ function resolveDashboardPath(title) {
     if (t.includes("account approved") || t.includes("re-activated")) {
         return "/login";
     }
+    if (t.includes("announcement")) {
+        return "/dashboard/notifications";
+    }
     if (t.includes("task") ||
         t.includes("assignment") ||
         t.includes("submission") ||

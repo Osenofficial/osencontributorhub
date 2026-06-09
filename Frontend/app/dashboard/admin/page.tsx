@@ -16,6 +16,7 @@ import {
   UserPlus,
   XCircle,
   Pencil,
+  Megaphone,
 } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { StatusBadge } from '@/components/status-badge'
@@ -66,6 +67,7 @@ import { CONTRIBUTION_TYPES, findContributionItemById } from '@/lib/contribution
 import { type ContributorPeriodRow, type ContributorPeriodsResponse } from '@/lib/contributor-cycle'
 import { cn } from '@/lib/utils'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { AdminAnnouncementsPanel } from '@/components/admin-announcements-panel'
 
 /** End of today (local) for new tasks — only used when creating a task. */
 function defaultDeadlineTodayEnd(): string {
@@ -333,7 +335,7 @@ export default function AdminPage() {
   const { currentUser } = useApp()
   if (!currentUser) return null
   const [tasks, setTasks] = useState<Task[]>([])
-  const [view, setView] = useState<'tasks' | 'users'>('tasks')
+  const [view, setView] = useState<'tasks' | 'users' | 'announcements'>('tasks')
   const [taskForm, setTaskForm] = useState<{ mode: 'create' } | { mode: 'edit'; taskId: string } | null>(null)
   const [viewTask, setViewTask] = useState<Task | null>(null)
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
@@ -1024,6 +1026,14 @@ export default function AdminPage() {
                 Users
               </button>
             )}
+            {currentUser.role === 'admin' && (
+              <button
+                onClick={() => setView('announcements')}
+                className={`px-3 py-1 rounded-full flex items-center gap-1 ${view === 'announcements' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground'}`}
+              >
+                <Megaphone className="size-3" /> Announcements
+              </button>
+            )}
           </div>
           {view === 'tasks' && (
             <Button
@@ -1585,6 +1595,8 @@ export default function AdminPage() {
               </div>
             </TabsContent>
           </Tabs>
+        ) : view === 'announcements' ? (
+          <AdminAnnouncementsPanel />
         ) : (
           <div className="glass rounded-2xl border overflow-hidden">
             <div className="px-5 py-4 border-b border-border/50 flex items-center justify-between">

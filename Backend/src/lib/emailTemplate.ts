@@ -60,6 +60,10 @@ export function resolveDashboardPath(title: string): string {
     return "/login";
   }
 
+  if (t.includes("announcement")) {
+    return "/dashboard/notifications";
+  }
+
   if (
     t.includes("task") ||
     t.includes("assignment") ||

@@ -7,7 +7,18 @@ import {
   LeadActionRequest,
   type LeadActionType,
 } from "../models/LeadActionRequest";
+import { Announcement } from "../models/Announcement";
+import type { UserRole } from "../models/User";
 import { ensureActiveContributorPeriod, startNextContributorPeriod } from "../lib/contributorPeriodService";
+
+const ANNOUNCEMENT_ROLES: UserRole[] = [
+  "admin",
+  "lead",
+  "associate",
+  "intern",
+  "accounts",
+  "evangelist",
+];
 
 export const adminRouter = Router();
 
@@ -901,3 +912,81 @@ adminRouter.post("/lead-action-requests/:id/decline", requireRole("admin"), asyn
   }
 });
 
+// ----- Announcements (admin only) -----
+adminRouter.get("/announcements", requireRole("admin"), async (_req: AuthRequest, res, next) => {
+  try {
+    const list = await Announcement.find()
+      .populate("createdBy", "name email")
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.post("/announcements", requireRole("admin"), async (req: AuthRequest, res, next) => {
+  try {
+    const { title: titleRaw, message: messageRaw, targetRoles: rolesRaw } = req.body as {
+      title?: unknown;
+      message?: unknown;
+      targetRoles?: unknown;
+    };
+
+    const title = String(titleRaw ?? "").trim();
+    const message = String(messageRaw ?? "").trim();
+    if (!title) {
+      return res.status(400).json({ message: "Title is required" });
+    }
+    if (title.length > 120) {
+      return res.status(400).json({ message: "Title must be at most 120 characters" });
+    }
+    if (!message) {
+      return res.status(400).json({ message: "Message is required" });
+    }
+    if (message.length > 5000) {
+      return res.status(400).json({ message: "Message must be at most 5000 characters" });
+    }
+
+    const targetRoles = Array.isArray(rolesRaw)
+      ? [...new Set(rolesRaw.map((r) => String(r).trim()).filter(Boolean))]
+      : [];
+    const validRoles = targetRoles.filter((r): r is UserRole =>
+      (ANNOUNCEMENT_ROLES as readonly string[]).includes(r),
+    );
+    if (validRoles.length === 0) {
+      return res.status(400).json({ message: "Select at least one valid role" });
+    }
+
+    const recipients = await User.find({
+      role: { $in: validRoles },
+      status: "active",
+      isActive: true,
+    }).select("_id email");
+
+    const notificationTitle = `Announcement: ${title}`;
+    for (const user of recipients) {
+      await Notification.create({
+        user: user._id,
+        title: notificationTitle,
+        message,
+      });
+    }
+
+    const announcement = await Announcement.create({
+      title,
+      message,
+      targetRoles: validRoles,
+      createdBy: req.user!._id,
+      recipientCount: recipients.length,
+    });
+
+    const populated = await Announcement.findById(announcement._id).populate("createdBy", "name email");
+    res.status(201).json({
+      announcement: populated,
+      recipientCount: recipients.length,
+    });
+  } catch (err) {
+    next(err);
+  }
+});

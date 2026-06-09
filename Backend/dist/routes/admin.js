@@ -7,7 +7,16 @@ const User_1 = require("../models/User");
 const Task_1 = require("../models/Task");
 const Notification_1 = require("../models/Notification");
 const LeadActionRequest_1 = require("../models/LeadActionRequest");
+const Announcement_1 = require("../models/Announcement");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
+const ANNOUNCEMENT_ROLES = [
+    "admin",
+    "lead",
+    "associate",
+    "intern",
+    "accounts",
+    "evangelist",
+];
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.requireAuth);
 // Stats - admins and leads
@@ -824,6 +833,73 @@ exports.adminRouter.post("/lead-action-requests/:id/decline", (0, auth_1.require
             message: declinedMsg,
         });
         res.json({ success: true });
+    }
+    catch (err) {
+        next(err);
+    }
+});
+// ----- Announcements (admin only) -----
+exports.adminRouter.get("/announcements", (0, auth_1.requireRole)("admin"), async (_req, res, next) => {
+    try {
+        const list = await Announcement_1.Announcement.find()
+            .populate("createdBy", "name email")
+            .sort({ createdAt: -1 })
+            .limit(50);
+        res.json(list);
+    }
+    catch (err) {
+        next(err);
+    }
+});
+exports.adminRouter.post("/announcements", (0, auth_1.requireRole)("admin"), async (req, res, next) => {
+    try {
+        const { title: titleRaw, message: messageRaw, targetRoles: rolesRaw } = req.body;
+        const title = String(titleRaw ?? "").trim();
+        const message = String(messageRaw ?? "").trim();
+        if (!title) {
+            return res.status(400).json({ message: "Title is required" });
+        }
+        if (title.length > 120) {
+            return res.status(400).json({ message: "Title must be at most 120 characters" });
+        }
+        if (!message) {
+            return res.status(400).json({ message: "Message is required" });
+        }
+        if (message.length > 5000) {
+            return res.status(400).json({ message: "Message must be at most 5000 characters" });
+        }
+        const targetRoles = Array.isArray(rolesRaw)
+            ? [...new Set(rolesRaw.map((r) => String(r).trim()).filter(Boolean))]
+            : [];
+        const validRoles = targetRoles.filter((r) => ANNOUNCEMENT_ROLES.includes(r));
+        if (validRoles.length === 0) {
+            return res.status(400).json({ message: "Select at least one valid role" });
+        }
+        const recipients = await User_1.User.find({
+            role: { $in: validRoles },
+            status: "active",
+            isActive: true,
+        }).select("_id email");
+        const notificationTitle = `Announcement: ${title}`;
+        for (const user of recipients) {
+            await Notification_1.Notification.create({
+                user: user._id,
+                title: notificationTitle,
+                message,
+            });
+        }
+        const announcement = await Announcement_1.Announcement.create({
+            title,
+            message,
+            targetRoles: validRoles,
+            createdBy: req.user._id,
+            recipientCount: recipients.length,
+        });
+        const populated = await Announcement_1.Announcement.findById(announcement._id).populate("createdBy", "name email");
+        res.status(201).json({
+            announcement: populated,
+            recipientCount: recipients.length,
+        });
     }
     catch (err) {
         next(err);
