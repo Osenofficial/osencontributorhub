@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueNotifyUserByEmail = queueNotifyUserByEmail;
+exports.sendNotificationEmailToAddress = sendNotificationEmailToAddress;
+exports.sendNotificationEmailToUserId = sendNotificationEmailToUserId;
 exports.queueNotifyUsersByRole = queueNotifyUsersByRole;
 const User_1 = require("../models/User");
 const emailTemplate_1 = require("./emailTemplate");
@@ -10,25 +12,27 @@ const mail_1 = require("./mail");
  * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or Resend is not configured.
  */
 function queueNotifyUserByEmail(userId, title, message) {
-    void (async () => {
-        try {
-            const u = await User_1.User.findById(userId).select("email").lean();
-            const email = u?.email;
-            if (!email)
-                return;
-            const appName = (0, emailTemplate_1.getEmailAppName)();
-            const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message });
-            await (0, mail_1.sendMail)({
-                to: email,
-                subject: `[${appName}] ${title}`,
-                text,
-                html,
-            });
-        }
-        catch (e) {
-            console.error("[notifyEmail] user", e);
-        }
-    })();
+    void sendNotificationEmailToUserId(userId, title, message).catch((e) => {
+        console.error("[notifyEmail] user", e);
+    });
+}
+/** Awaited delivery — use for bulk sends (announcements) where you need a delivery report. */
+async function sendNotificationEmailToAddress(to, title, message) {
+    const appName = (0, emailTemplate_1.getEmailAppName)();
+    const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message });
+    return (0, mail_1.sendMail)({
+        to,
+        subject: `[${appName}] ${title}`,
+        text,
+        html,
+    });
+}
+async function sendNotificationEmailToUserId(userId, title, message) {
+    const u = await User_1.User.findById(userId).select("email").lean();
+    const email = u?.email?.trim();
+    if (!email)
+        return { ok: false, skipped: true, reason: "no_email" };
+    return sendNotificationEmailToAddress(email, title, message);
 }
 /** Notify every user with the given role (e.g. all admins). */
 function queueNotifyUsersByRole(role, title, message) {

@@ -8,6 +8,7 @@ const Task_1 = require("../models/Task");
 const Notification_1 = require("../models/Notification");
 const LeadActionRequest_1 = require("../models/LeadActionRequest");
 const Announcement_1 = require("../models/Announcement");
+const notifyEmail_1 = require("../lib/notifyEmail");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
 const ANNOUNCEMENT_ROLES = [
     "admin",
@@ -17,6 +18,38 @@ const ANNOUNCEMENT_ROLES = [
     "accounts",
     "evangelist",
 ];
+function announcementRecipientFilter(validRoles) {
+    return {
+        role: { $in: validRoles },
+        status: "active",
+        email: { $exists: true, $nin: [null, ""] },
+    };
+}
+function allActiveRecipientFilter(excludeAdmins) {
+    return {
+        status: "active",
+        email: { $exists: true, $nin: [null, ""] },
+        ...(excludeAdmins ? { role: { $ne: "admin" } } : {}),
+    };
+}
+function parseAnnouncementTargetRoles(rolesRaw) {
+    const targetRoles = Array.isArray(rolesRaw)
+        ? [...new Set(rolesRaw.map((r) => String(r).trim()).filter(Boolean))]
+        : [];
+    return targetRoles.filter((r) => ANNOUNCEMENT_ROLES.includes(r));
+}
+async function sendAnnouncementEmailWithRetry(email, title, message) {
+    let last = { ok: false, error: "Not attempted" };
+    for (let attempt = 0; attempt < 3; attempt++) {
+        last = await (0, notifyEmail_1.sendNotificationEmailToAddress)(email, title, message);
+        if (last.ok || ("skipped" in last && last.skipped))
+            return last;
+        if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        }
+    }
+    return last;
+}
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.requireAuth);
 // Stats - admins and leads
@@ -839,6 +872,47 @@ exports.adminRouter.post("/lead-action-requests/:id/decline", (0, auth_1.require
     }
 });
 // ----- Announcements (admin only) -----
+exports.adminRouter.get("/announcements/recipient-count", (0, auth_1.requireRole)("admin"), async (req, res, next) => {
+    try {
+        const allActive = String(req.query.allActive || "").toLowerCase() === "true";
+        const excludeAdmins = String(req.query.excludeAdmins || "true").toLowerCase() !== "false";
+        if (allActive) {
+            const filter = allActiveRecipientFilter(excludeAdmins);
+            const users = await User_1.User.find(filter).select("role").lean();
+            const byRole = ANNOUNCEMENT_ROLES.map((role) => ({
+                role,
+                count: users.filter((u) => u.role === role).length,
+            })).filter((r) => r.count > 0);
+            return res.json({
+                count: users.length,
+                allActive: true,
+                excludeAdmins,
+                byRole,
+            });
+        }
+        const rolesParam = String(req.query.roles ?? "");
+        const rolesRaw = rolesParam ? rolesParam.split(",").map((r) => r.trim()) : [];
+        const validRoles = parseAnnouncementTargetRoles(rolesRaw);
+        if (validRoles.length === 0) {
+            return res.status(400).json({ message: "Provide at least one valid role in ?roles=" });
+        }
+        const filter = announcementRecipientFilter(validRoles);
+        const users = await User_1.User.find(filter).select("role").lean();
+        const byRole = validRoles.map((role) => ({
+            role,
+            count: users.filter((u) => u.role === role).length,
+        }));
+        res.json({
+            count: users.length,
+            allActive: false,
+            roles: validRoles,
+            byRole,
+        });
+    }
+    catch (err) {
+        next(err);
+    }
+});
 exports.adminRouter.get("/announcements", (0, auth_1.requireRole)("admin"), async (_req, res, next) => {
     try {
         const list = await Announcement_1.Announcement.find()
@@ -853,7 +927,7 @@ exports.adminRouter.get("/announcements", (0, auth_1.requireRole)("admin"), asyn
 });
 exports.adminRouter.post("/announcements", (0, auth_1.requireRole)("admin"), async (req, res, next) => {
     try {
-        const { title: titleRaw, message: messageRaw, targetRoles: rolesRaw } = req.body;
+        const { title: titleRaw, message: messageRaw, targetRoles: rolesRaw, audience, excludeAdmins } = req.body;
         const title = String(titleRaw ?? "").trim();
         const message = String(messageRaw ?? "").trim();
         if (!title) {
@@ -868,25 +942,53 @@ exports.adminRouter.post("/announcements", (0, auth_1.requireRole)("admin"), asy
         if (message.length > 5000) {
             return res.status(400).json({ message: "Message must be at most 5000 characters" });
         }
-        const targetRoles = Array.isArray(rolesRaw)
-            ? [...new Set(rolesRaw.map((r) => String(r).trim()).filter(Boolean))]
-            : [];
-        const validRoles = targetRoles.filter((r) => ANNOUNCEMENT_ROLES.includes(r));
-        if (validRoles.length === 0) {
-            return res.status(400).json({ message: "Select at least one valid role" });
+        const sendToAllActive = audience !== "roles";
+        const omitAdmins = excludeAdmins !== false;
+        let validRoles = [];
+        let recipients;
+        if (sendToAllActive) {
+            recipients = await User_1.User.find(allActiveRecipientFilter(omitAdmins)).select("_id email name role status");
+            validRoles = [...new Set(recipients.map((u) => u.role))];
         }
-        const recipients = await User_1.User.find({
-            role: { $in: validRoles },
-            status: "active",
-            isActive: true,
-        }).select("_id email");
+        else {
+            validRoles = parseAnnouncementTargetRoles(rolesRaw);
+            if (validRoles.length === 0) {
+                return res.status(400).json({ message: "Select at least one valid role" });
+            }
+            recipients = await User_1.User.find(announcementRecipientFilter(validRoles)).select("_id email name role status");
+        }
         const notificationTitle = `Announcement: ${title}`;
-        for (const user of recipients) {
-            await Notification_1.Notification.create({
+        if (recipients.length > 0) {
+            await Notification_1.Notification.insertMany(recipients.map((user) => ({
                 user: user._id,
                 title: notificationTitle,
                 message,
-            });
+                read: false,
+            })));
+        }
+        let emailsSent = 0;
+        let emailsFailed = 0;
+        let emailsSkipped = 0;
+        const emailErrors = [];
+        for (const user of recipients) {
+            const email = String(user.email || "").trim();
+            if (!email) {
+                emailsSkipped += 1;
+                continue;
+            }
+            const result = await sendAnnouncementEmailWithRetry(email, notificationTitle, message);
+            if (result.ok) {
+                emailsSent += 1;
+            }
+            else if ("skipped" in result && result.skipped) {
+                emailsSkipped += 1;
+            }
+            else {
+                emailsFailed += 1;
+                const errMsg = "error" in result ? result.error : "Unknown error";
+                emailErrors.push(`${user.name || email}: ${errMsg}`);
+                console.error("[announcements] email failed for", email, errMsg);
+            }
         }
         const announcement = await Announcement_1.Announcement.create({
             title,
@@ -899,6 +1001,12 @@ exports.adminRouter.post("/announcements", (0, auth_1.requireRole)("admin"), asy
         res.status(201).json({
             announcement: populated,
             recipientCount: recipients.length,
+            notificationsCreated: recipients.length,
+            emailsSent,
+            emailsFailed,
+            emailsSkipped,
+            emailErrors: emailErrors.slice(0, 10),
+            audience: sendToAllActive ? "all_active" : "roles",
         });
     }
     catch (err) {

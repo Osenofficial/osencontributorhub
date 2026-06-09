@@ -29,6 +29,7 @@ const ROLE_OPTIONS = [
 ] as const
 
 type RoleValue = (typeof ROLE_OPTIONS)[number]['value']
+type AudienceMode = 'all_active' | 'roles'
 
 type AnnouncementRow = {
   _id: string
@@ -40,16 +41,39 @@ type AnnouncementRow = {
   createdBy?: { name?: string; email?: string }
 }
 
+type RecipientPreview = {
+  count: number
+  allActive?: boolean
+  excludeAdmins?: boolean
+  byRole: Array<{ role: string; count: number }>
+}
+
+type SendResult = {
+  recipientCount: number
+  notificationsCreated: number
+  emailsSent: number
+  emailsFailed: number
+  emailsSkipped: number
+  emailErrors?: string[]
+  audience?: string
+}
+
 export function AdminAnnouncementsPanel() {
   const [title, setTitle] = useState('')
   const [message, setMessage] = useState('')
-  const [selectedRoles, setSelectedRoles] = useState<RoleValue[]>(['intern', 'associate', 'lead', 'evangelist'])
+  const [audienceMode, setAudienceMode] = useState<AudienceMode>('all_active')
+  const [excludeAdmins, setExcludeAdmins] = useState(true)
+  const [selectedRoles, setSelectedRoles] = useState<RoleValue[]>(
+    ROLE_OPTIONS.map((r) => r.value),
+  )
   const [history, setHistory] = useState<AnnouncementRow[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [sending, setSending] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [recipientPreview, setRecipientPreview] = useState<RecipientPreview | null>(null)
+  const [loadingPreview, setLoadingPreview] = useState(false)
 
   const loadHistory = useCallback(() => {
     setLoadingHistory(true)
@@ -63,6 +87,27 @@ export function AdminAnnouncementsPanel() {
     loadHistory()
   }, [loadHistory])
 
+  useEffect(() => {
+    setLoadingPreview(true)
+    const url =
+      audienceMode === 'all_active'
+        ? `/admin/announcements/recipient-count?allActive=true&excludeAdmins=${excludeAdmins}`
+        : selectedRoles.length === 0
+          ? null
+          : `/admin/announcements/recipient-count?roles=${encodeURIComponent(selectedRoles.join(','))}`
+
+    if (!url) {
+      setRecipientPreview(null)
+      setLoadingPreview(false)
+      return
+    }
+
+    apiFetch<RecipientPreview>(url)
+      .then(setRecipientPreview)
+      .catch(() => setRecipientPreview(null))
+      .finally(() => setLoadingPreview(false))
+  }, [audienceMode, excludeAdmins, selectedRoles])
+
   function toggleRole(role: RoleValue, checked: boolean) {
     setSelectedRoles((prev) => {
       if (checked) return prev.includes(role) ? prev : [...prev, role]
@@ -70,30 +115,34 @@ export function AdminAnnouncementsPanel() {
     })
   }
 
-  function selectAllRoles() {
-    setSelectedRoles(ROLE_OPTIONS.map((r) => r.value))
-  }
-
-  function clearRoles() {
-    setSelectedRoles([])
-  }
-
   async function handleSend() {
     setError(null)
     setSuccess(null)
     setSending(true)
     try {
-      const res = await apiFetch<{ recipientCount: number }>('/admin/announcements', {
+      const res = await apiFetch<SendResult>('/admin/announcements', {
         method: 'POST',
         body: JSON.stringify({
           title: title.trim(),
           message: message.trim(),
-          targetRoles: selectedRoles,
+          audience: audienceMode === 'all_active' ? 'all_active' : 'roles',
+          excludeAdmins: audienceMode === 'all_active' ? excludeAdmins : false,
+          targetRoles: audienceMode === 'roles' ? selectedRoles : undefined,
         }),
       })
       setTitle('')
       setMessage('')
-      setSuccess(`Announcement sent to ${res.recipientCount} active user${res.recipientCount === 1 ? '' : 's'}.`)
+      let msg = `${res.recipientCount} people notified, ${res.emailsSent} email${res.emailsSent === 1 ? '' : 's'} sent.`
+      if (res.emailsFailed > 0) {
+        msg += ` ${res.emailsFailed} failed.`
+      }
+      if (res.emailsSkipped > 0) {
+        msg += ` ${res.emailsSkipped} skipped.`
+      }
+      setSuccess(msg)
+      if (res.emailErrors?.length) {
+        setError(res.emailErrors.join(' · '))
+      }
       setConfirmOpen(false)
       loadHistory()
     } catch (e: unknown) {
@@ -104,7 +153,10 @@ export function AdminAnnouncementsPanel() {
     }
   }
 
-  const canSend = title.trim().length > 0 && message.trim().length > 0 && selectedRoles.length > 0
+  const canSend =
+    title.trim().length > 0 &&
+    message.trim().length > 0 &&
+    (audienceMode === 'all_active' || selectedRoles.length > 0)
 
   return (
     <div className="space-y-6">
@@ -116,8 +168,7 @@ export function AdminAnnouncementsPanel() {
           <div>
             <h3 className="font-semibold">Send announcement</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Broadcast to selected roles. Each recipient gets an in-app notification and an email (when email
-              notifications are enabled).
+              Everyone selected gets an in-app notification and an email.
             </p>
           </div>
         </div>
@@ -127,7 +178,7 @@ export function AdminAnnouncementsPanel() {
             <Label htmlFor="announcement-title">Title</Label>
             <Input
               id="announcement-title"
-              placeholder="e.g. Monthly contributor sync — Friday 6 PM"
+              placeholder="e.g. May work — please raise your invoice"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               maxLength={120}
@@ -147,38 +198,110 @@ export function AdminAnnouncementsPanel() {
             />
           </div>
 
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Label>Send to roles</Label>
-              <div className="flex gap-2">
-                <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={selectAllRoles}>
-                  Select all
-                </Button>
-                <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={clearRoles}>
-                  Clear
-                </Button>
+          <div className="space-y-3 rounded-xl border border-border/60 bg-card/30 p-4">
+            <Label>Who should receive this?</Label>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setAudienceMode('all_active')}
+                className={`rounded-lg border p-3 text-left transition-colors ${
+                  audienceMode === 'all_active'
+                    ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/30'
+                    : 'border-border/60 bg-card/40 hover:bg-muted/30'
+                }`}
+              >
+                <p className="text-sm font-medium">All active members</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Everyone approved — same as Users tab (14 members).
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAudienceMode('roles')}
+                className={`rounded-lg border p-3 text-left transition-colors ${
+                  audienceMode === 'roles'
+                    ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/30'
+                    : 'border-border/60 bg-card/40 hover:bg-muted/30'
+                }`}
+              >
+                <p className="text-sm font-medium">Specific roles only</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  e.g. only Associates, only Leads, only Evangelists…
+                </p>
+              </button>
+            </div>
+
+            {audienceMode === 'all_active' && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox checked={excludeAdmins} onCheckedChange={(v) => setExcludeAdmins(v === true)} />
+                Exclude admins (recommended)
+              </label>
+            )}
+
+            {audienceMode === 'roles' && (
+              <div className="space-y-2 rounded-lg border border-border/60 bg-background/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-muted-foreground">Select one or more roles</p>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setSelectedRoles(ROLE_OPTIONS.map((r) => r.value))}
+                    >
+                      Select all
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setSelectedRoles([])}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {ROLE_OPTIONS.map((role) => {
+                    const roleCount = recipientPreview?.byRole.find((b) => b.role === role.value)?.count ?? 0
+                    return (
+                      <label
+                        key={role.value}
+                        className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/60 px-2.5 py-2 text-sm hover:bg-muted/20"
+                      >
+                        <Checkbox
+                          checked={selectedRoles.includes(role.value)}
+                          onCheckedChange={(v) => toggleRole(role.value, v === true)}
+                        />
+                        <span className="flex-1">
+                          {role.label}
+                          {audienceMode === 'roles' && roleCount > 0 ? (
+                            <span className="ml-1 text-[10px] text-muted-foreground">({roleCount})</span>
+                          ) : null}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {ROLE_OPTIONS.map((role) => {
-                const checked = selectedRoles.includes(role.value)
-                return (
-                  <label
-                    key={role.value}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border/60 bg-card/40 px-3 py-2.5 text-sm transition-colors hover:bg-muted/30"
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(v) => toggleRole(role.value, v === true)}
-                    />
-                    <span>{role.label}</span>
-                  </label>
-                )
-              })}
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              Only <span className="font-medium text-foreground">active</span> users with the selected roles receive
-              this announcement.
+            )}
+
+            <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
+              {loadingPreview
+                ? 'Calculating recipients…'
+                : recipientPreview != null
+                  ? audienceMode === 'roles' && selectedRoles.length > 0
+                    ? `Will reach ${recipientPreview.count} active user${recipientPreview.count === 1 ? '' : 's'} (${selectedRoles
+                        .map((r) => ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r)
+                        .join(', ')})`
+                    : `Will reach ${recipientPreview.count} active user${recipientPreview.count === 1 ? '' : 's'}`
+                  : audienceMode === 'roles' && selectedRoles.length === 0
+                    ? 'Select at least one role'
+                    : null}
             </p>
           </div>
 
@@ -187,7 +310,7 @@ export function AdminAnnouncementsPanel() {
 
           <Button
             type="button"
-            disabled={!canSend || sending}
+            disabled={!canSend || sending || loadingPreview}
             className="gap-2 bg-primary text-primary-foreground"
             onClick={() => setConfirmOpen(true)}
           >
@@ -232,12 +355,6 @@ export function AdminAnnouncementsPanel() {
                   </span>
                   <span>·</span>
                   <span>{row.recipientCount} recipient{row.recipientCount === 1 ? '' : 's'}</span>
-                  {row.createdBy?.name && (
-                    <>
-                      <span>·</span>
-                      <span>By {row.createdBy.name}</span>
-                    </>
-                  )}
                 </div>
               </div>
             ))
@@ -251,13 +368,22 @@ export function AdminAnnouncementsPanel() {
             <AlertDialogTitle>Send this announcement?</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <span className="block">
-                <strong>{title.trim()}</strong> will be sent to all active users with roles:{' '}
-                {selectedRoles
-                  .map((r) => ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r)
-                  .join(', ')}
-                .
+                <strong>{title.trim()}</strong> →{' '}
+                <strong>{recipientPreview?.count ?? '?'}</strong> active user
+                {(recipientPreview?.count ?? 0) === 1 ? '' : 's'}.
               </span>
-              <span className="block">They will receive an in-app notification and an email.</span>
+              {audienceMode === 'roles' && selectedRoles.length > 0 && (
+                <span className="block text-xs">
+                  Roles:{' '}
+                  {selectedRoles.map((r) => ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r).join(', ')}
+                </span>
+              )}
+              {audienceMode === 'all_active' && (
+                <span className="block text-xs">
+                  Audience: all active members{excludeAdmins ? ' (admins excluded)' : ''}.
+                </span>
+              )}
+              <span className="block">Each person gets a notification and an email.</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
