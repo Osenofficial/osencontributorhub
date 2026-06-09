@@ -185,6 +185,8 @@ exports.dashboardRouter.post("/contribute", async (req, res, next) => {
         const populated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email");
+        const actorName = req.user.name || "A contributor";
+        await notifyTaskSubmittedForReview(actorName, task.title);
         res.status(201).json(populated);
     }
     catch (err) {
@@ -420,15 +422,7 @@ exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
         }
         await task.save();
         if (submittedForReview) {
-            const submitMsg = `${actorName} submitted "${task.title}" for review.`;
-            const admins = await User_1.User.find({ role: "admin" }).select("_id");
-            for (const a of admins) {
-                await Notification_1.Notification.create({
-                    user: a._id,
-                    title: "Task submitted for review",
-                    message: submitMsg,
-                });
-            }
+            await notifyTaskSubmittedForReview(actorName, task.title);
         }
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")

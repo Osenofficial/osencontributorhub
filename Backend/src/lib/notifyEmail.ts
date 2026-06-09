@@ -1,15 +1,7 @@
 import type { UserRole } from "../models/User";
 import { User } from "../models/User";
+import { buildNotificationEmail, getEmailAppName } from "./emailTemplate";
 import { sendMail } from "./mail";
-
-const appName =
-  process.env.EMAIL_APP_NAME?.trim() ||
-  process.env.NEXT_PUBLIC_APP_NAME?.trim() ||
-  "OSEN Contributor Hub";
-
-function footer(): string {
-  return `\n\n— ${appName}\nThis update also appears in your dashboard notifications.`;
-}
 
 /**
  * Email for a single user (by Mongo id). Fire-and-forget; does not block the HTTP response.
@@ -21,10 +13,13 @@ export function queueNotifyUserByEmail(userId: unknown, title: string, message: 
       const u = await User.findById(userId).select("email").lean<{ email?: string } | null>();
       const email = u?.email;
       if (!email) return;
+      const appName = getEmailAppName();
+      const { html, text } = buildNotificationEmail({ title, message });
       await sendMail({
         to: email,
         subject: `[${appName}] ${title}`,
-        text: `${message}${footer()}`,
+        text,
+        html,
       });
     } catch (e) {
       console.error("[notifyEmail] user", e);
@@ -37,11 +32,12 @@ export function queueNotifyUsersByRole(role: UserRole, title: string, message: s
   void (async () => {
     try {
       const users = await User.find({ role }).select("email").lean<Array<{ email?: string }>>();
-      const text = `${message}${footer()}`;
+      const appName = getEmailAppName();
+      const { html, text } = buildNotificationEmail({ title, message });
       const subject = `[${appName}] ${title}`;
       for (const u of users) {
         if (!u.email) continue;
-        await sendMail({ to: u.email, subject, text });
+        await sendMail({ to: u.email, subject, text, html });
       }
     } catch (e) {
       console.error("[notifyEmail] role", role, e);

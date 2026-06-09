@@ -3,13 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueNotifyUserByEmail = queueNotifyUserByEmail;
 exports.queueNotifyUsersByRole = queueNotifyUsersByRole;
 const User_1 = require("../models/User");
+const emailTemplate_1 = require("./emailTemplate");
 const mail_1 = require("./mail");
-const appName = process.env.EMAIL_APP_NAME?.trim() ||
-    process.env.NEXT_PUBLIC_APP_NAME?.trim() ||
-    "OSEN Contributor Hub";
-function footer() {
-    return `\n\n— ${appName}\nThis update also appears in your dashboard notifications.`;
-}
 /**
  * Email for a single user (by Mongo id). Fire-and-forget; does not block the HTTP response.
  * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or Resend is not configured.
@@ -21,10 +16,13 @@ function queueNotifyUserByEmail(userId, title, message) {
             const email = u?.email;
             if (!email)
                 return;
+            const appName = (0, emailTemplate_1.getEmailAppName)();
+            const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message });
             await (0, mail_1.sendMail)({
                 to: email,
                 subject: `[${appName}] ${title}`,
-                text: `${message}${footer()}`,
+                text,
+                html,
             });
         }
         catch (e) {
@@ -37,12 +35,13 @@ function queueNotifyUsersByRole(role, title, message) {
     void (async () => {
         try {
             const users = await User_1.User.find({ role }).select("email").lean();
-            const text = `${message}${footer()}`;
+            const appName = (0, emailTemplate_1.getEmailAppName)();
+            const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message });
             const subject = `[${appName}] ${title}`;
             for (const u of users) {
                 if (!u.email)
                     continue;
-                await (0, mail_1.sendMail)({ to: u.email, subject, text });
+                await (0, mail_1.sendMail)({ to: u.email, subject, text, html });
             }
         }
         catch (e) {
