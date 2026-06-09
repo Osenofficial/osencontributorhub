@@ -60,6 +60,19 @@ function docOwnerId(doc: { submittedBy?: unknown }): string | null {
   return raw != null ? String(raw) : null;
 }
 
+/** Email + in-app alert for admins and leads when a task is submitted for review. */
+async function notifyTaskSubmittedForReview(actorName: string, taskTitle: string): Promise<void> {
+  const submitMsg = `${actorName} submitted "${taskTitle}" for review.`;
+  const reviewers = await User.find({ role: { $in: ["admin", "lead"] } }).select("_id");
+  for (const r of reviewers) {
+    await Notification.create({
+      user: r._id,
+      title: "Task submitted for review",
+      message: submitMsg,
+    });
+  }
+}
+
 async function notifyStaffAboutThreadComment(
   title: string,
   message: string,
@@ -208,6 +221,9 @@ dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
     const populated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
       .populate("createdBy", "name email");
+
+    const actorName = req.user!.name || "A contributor";
+    await notifyTaskSubmittedForReview(actorName, task.title);
 
     res.status(201).json(populated);
   } catch (err) {
@@ -469,15 +485,7 @@ dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
     await task.save();
 
     if (submittedForReview) {
-      const submitMsg = `${actorName} submitted "${task.title}" for review.`;
-      const admins = await User.find({ role: "admin" }).select("_id");
-      for (const a of admins) {
-        await Notification.create({
-          user: a._id,
-          title: "Task submitted for review",
-          message: submitMsg,
-        });
-      }
+      await notifyTaskSubmittedForReview(actorName, task.title);
     }
 
     const updated = await Task.findById(task._id)

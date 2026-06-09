@@ -57,6 +57,18 @@ function docOwnerId(doc) {
     }
     return raw != null ? String(raw) : null;
 }
+/** Email + in-app alert for admins and leads when a task is submitted for review. */
+async function notifyTaskSubmittedForReview(actorName, taskTitle) {
+    const submitMsg = `${actorName} submitted "${taskTitle}" for review.`;
+    const reviewers = await User_1.User.find({ role: { $in: ["admin", "lead"] } }).select("_id");
+    for (const r of reviewers) {
+        await Notification_1.Notification.create({
+            user: r._id,
+            title: "Task submitted for review",
+            message: submitMsg,
+        });
+    }
+}
 async function notifyStaffAboutThreadComment(title, message, includeAccounts) {
     const admins = await User_1.User.find({ role: "admin" }).select("_id");
     for (const a of admins) {
