@@ -8,6 +8,7 @@ const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const User_1 = require("../models/User");
 const Task_1 = require("../models/Task");
+const Notification_1 = require("../models/Notification");
 const auth_1 = require("../middleware/auth");
 exports.authRouter = (0, express_1.Router)();
 function getAvatarForUser(name, email) {
@@ -70,6 +71,20 @@ exports.authRouter.post("/register", async (req, res, next) => {
             isActive: false,
             avatar,
         });
+        await Notification_1.Notification.create({
+            user: user._id,
+            title: "Signup received",
+            message: `Thanks for signing up, ${name}! Your account is pending approval by an admin. We'll notify you when you can log in.`,
+        });
+        const admins = await User_1.User.find({ role: "admin" }).select("_id");
+        const signupMsg = `${name} (${email}) signed up and is waiting for approval.`;
+        for (const a of admins) {
+            await Notification_1.Notification.create({
+                user: a._id,
+                title: "New signup pending approval",
+                message: signupMsg,
+            });
+        }
         res.status(201).json({
             message: "Signup successful. Your account is pending approval by an admin.",
             user: {

@@ -8,7 +8,6 @@ const Task_1 = require("../models/Task");
 const Notification_1 = require("../models/Notification");
 const LeadActionRequest_1 = require("../models/LeadActionRequest");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
-const notifyEmail_1 = require("../lib/notifyEmail");
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(auth_1.requireAuth);
 // Stats - admins and leads
@@ -43,9 +42,21 @@ exports.adminRouter.get("/users", (0, auth_1.requireRole)("admin", "lead"), asyn
 exports.adminRouter.patch("/users/:id/role", (0, auth_1.requireRole)("admin"), async (req, res, next) => {
     try {
         const { role } = req.body;
+        const existing = await User_1.User.findById(req.params.id).select("role");
+        if (!existing) {
+            return res.status(404).json({ message: "User not found" });
+        }
+        const prevRole = existing.role;
         const user = await User_1.User.findByIdAndUpdate(req.params.id, { role }, { new: true }).select("-passwordHash");
         if (!user) {
             return res.status(404).json({ message: "User not found" });
+        }
+        if (role && role !== prevRole) {
+            await Notification_1.Notification.create({
+                user: user._id,
+                title: "Your role was updated",
+                message: `Your role has been changed from ${prevRole} to ${role}.`,
+            });
         }
         res.json(user);
     }
@@ -60,6 +71,11 @@ exports.adminRouter.post("/users/:id/approve", (0, auth_1.requireRole)("admin"),
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
+        await Notification_1.Notification.create({
+            user: user._id,
+            title: "Account approved",
+            message: `Welcome, ${user.name}! Your account has been approved. You can now log in to the contributor hub.`,
+        });
         res.json(user);
     }
     catch (err) {
@@ -72,6 +88,11 @@ exports.adminRouter.post("/users/:id/reject", (0, auth_1.requireRole)("admin"), 
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
+        await Notification_1.Notification.create({
+            user: user._id,
+            title: "Signup not approved",
+            message: `Your signup request for ${user.email} was not approved. Contact your admin if you believe this is a mistake.`,
+        });
         res.json(user);
     }
     catch (err) {
@@ -84,6 +105,11 @@ exports.adminRouter.post("/users/:id/suspend", (0, auth_1.requireRole)("admin"),
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
+        await Notification_1.Notification.create({
+            user: user._id,
+            title: "Account suspended",
+            message: "Your account has been suspended. Contact your admin if you need access restored.",
+        });
         res.json(user);
     }
     catch (err) {
@@ -96,6 +122,11 @@ exports.adminRouter.post("/users/:id/activate", (0, auth_1.requireRole)("admin")
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
+        await Notification_1.Notification.create({
+            user: user._id,
+            title: "Account re-activated",
+            message: "Your account has been re-activated. You can log in again.",
+        });
         res.json(user);
     }
     catch (err) {
@@ -143,7 +174,6 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
                 title: "New Task Assigned",
                 message: title,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(assigneeId, "New task assigned", `You have been assigned a new task: "${String(title)}"`);
         }
         res.status(201).json(task);
     }
@@ -273,7 +303,6 @@ async function notifyAdminsLeadActionLine(message) {
             message,
         });
     }
-    (0, notifyEmail_1.queueNotifyUsersByRole)("admin", "Lead action needs approval", message);
 }
 exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead"), async (req, res, next) => {
     try {
@@ -320,7 +349,6 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                         title: "New Task Assigned",
                         message: task.title,
                     });
-                    (0, notifyEmail_1.queueNotifyUserByEmail)(nextAssigneeId, "New task assigned", `You have been assigned a new task: "${String(task.title)}"`);
                 }
             }
         }
@@ -373,7 +401,6 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 title: "Task Approved",
                 message: msg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(task.assignedTo, "Task approved", msg);
         }
         if (fromStatus === "submitted" && (task.status === "rejected" || task.status === "in_progress") && task.assignedTo) {
             const msg = rejectComment
@@ -384,7 +411,6 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 title: "Submission needs revision",
                 message: msg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(task.assignedTo, "Submission needs revision", msg);
         }
         if (fromStatus === "completed" && task.status === "rejected" && task.assignedTo) {
             const msg = rejectComment
@@ -395,7 +421,6 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
                 title: "Task approval reversed",
                 message: msg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(task.assignedTo, "Task approval reversed", msg);
         }
         const populated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
@@ -420,7 +445,16 @@ exports.adminRouter.delete("/tasks/:id", (0, auth_1.requireRole)("admin", "lead"
                 message: "Leads cannot delete tasks directly. Submit a delete request from the panel — an admin must approve it.",
             });
         }
+        const assigneeId = task.assignedTo;
+        const taskTitle = task.title;
         await Task_1.Task.findByIdAndDelete(req.params.id);
+        if (assigneeId) {
+            await Notification_1.Notification.create({
+                user: assigneeId,
+                title: "Task removed",
+                message: `The task "${taskTitle}" has been removed.`,
+            });
+        }
         res.json({ success: true });
     }
     catch (err) {
@@ -480,7 +514,6 @@ exports.adminRouter.post("/tasks/:id/approve-assignment", (0, auth_1.requireRole
             title: "Task assigned to you",
             message: assignMsg,
         });
-        (0, notifyEmail_1.queueNotifyUserByEmail)(userId, "Task assigned to you", assignMsg);
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -514,7 +547,6 @@ exports.adminRouter.post("/tasks/:id/reject-assignment", (0, auth_1.requireRole)
             title: "Assignment request",
             message: declineMsg,
         });
-        (0, notifyEmail_1.queueNotifyUserByEmail)(userId, "Assignment request declined", declineMsg);
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -652,11 +684,22 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
             return res.status(400).json({ message: "Task no longer exists" });
         }
         switch (doc.type) {
-            case "delete_task":
+            case "delete_task": {
+                const assigneeId = task.assignedTo;
+                const taskTitle = task.title;
                 await Task_1.Task.findByIdAndDelete(task._id);
+                if (assigneeId) {
+                    await Notification_1.Notification.create({
+                        user: assigneeId,
+                        title: "Task removed",
+                        message: `The task "${taskTitle}" has been removed.`,
+                    });
+                }
                 break;
+            }
             case "edit_task": {
                 const payload = (doc.payload || {});
+                const prevAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
                 if (payload.assignedTo !== undefined) {
                     const nextAssignee = parseAssigneeIdFromBody(payload.assignedTo);
                     const assignErr = await assigneeValidationError(nextAssignee);
@@ -674,6 +717,14 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                     meta: { viaLeadApprovalRequest: true },
                 });
                 await task.save();
+                const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
+                if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
+                    await Notification_1.Notification.create({
+                        user: nextAssigneeId,
+                        title: "New Task Assigned",
+                        message: task.title,
+                    });
+                }
                 break;
             }
             case "reject_submission": {
@@ -703,7 +754,6 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                         title: "Submission needs revision",
                         message: subMsg,
                     });
-                    (0, notifyEmail_1.queueNotifyUserByEmail)(task.assignedTo, "Submission needs revision", subMsg);
                 }
                 break;
             }
@@ -728,7 +778,6 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                         title: "Task Approved",
                         message: apprMsg,
                     });
-                    (0, notifyEmail_1.queueNotifyUserByEmail)(task.assignedTo, "Task approved", apprMsg);
                 }
                 break;
             }
@@ -747,7 +796,6 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
             title: "Request approved",
             message: approvedMsg,
         });
-        (0, notifyEmail_1.queueNotifyUserByEmail)(doc.requestedBy, "Lead request approved", approvedMsg);
         res.json({ success: true, type: doc.type });
     }
     catch (err) {
@@ -775,7 +823,6 @@ exports.adminRouter.post("/lead-action-requests/:id/decline", (0, auth_1.require
             title: "Request declined",
             message: declinedMsg,
         });
-        (0, notifyEmail_1.queueNotifyUserByEmail)(doc.requestedBy, "Lead request declined", declinedMsg);
         res.json({ success: true });
     }
     catch (err) {

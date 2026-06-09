@@ -35,11 +35,16 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Notification = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
+const notifyEmail_1 = require("../lib/notifyEmail");
 const NotificationSchema = new mongoose_1.Schema({
     user: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
     title: { type: String, required: true },
     message: { type: String, required: true },
     read: { type: Boolean, default: false },
 }, { timestamps: { createdAt: true, updatedAt: false } });
+// Keep email delivery aligned with in-app notifications across the app.
+NotificationSchema.post("save", function (doc) {
+    (0, notifyEmail_1.queueNotifyUserByEmail)(doc.user, doc.title, doc.message);
+});
 exports.Notification = mongoose_1.default.models.Notification ||
     mongoose_1.default.model("Notification", NotificationSchema);

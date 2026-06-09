@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User";
 import { Task } from "../models/Task";
+import { Notification } from "../models/Notification";
 import { generateToken, requireAuth, AuthRequest } from "../middleware/auth";
 
 export const authRouter = Router();
@@ -69,6 +70,22 @@ authRouter.post("/register", async (req, res, next) => {
       isActive: false,
       avatar,
     });
+
+    await Notification.create({
+      user: user._id,
+      title: "Signup received",
+      message: `Thanks for signing up, ${name}! Your account is pending approval by an admin. We'll notify you when you can log in.`,
+    });
+
+    const admins = await User.find({ role: "admin" }).select("_id");
+    const signupMsg = `${name} (${email}) signed up and is waiting for approval.`;
+    for (const a of admins) {
+      await Notification.create({
+        user: a._id,
+        title: "New signup pending approval",
+        message: signupMsg,
+      });
+    }
 
     res.status(201).json({
       message: "Signup successful. Your account is pending approval by an admin.",

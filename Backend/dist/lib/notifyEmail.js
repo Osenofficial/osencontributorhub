@@ -12,7 +12,7 @@ function footer() {
 }
 /**
  * Email for a single user (by Mongo id). Fire-and-forget; does not block the HTTP response.
- * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or SMTP is not configured.
+ * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or Resend is not configured.
  */
 function queueNotifyUserByEmail(userId, title, message) {
     void (async () => {

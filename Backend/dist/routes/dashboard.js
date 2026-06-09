@@ -16,7 +16,6 @@ const PayoutRequest_1 = require("../models/PayoutRequest");
 const ContributorPeriod_1 = require("../models/ContributorPeriod");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
 const payoutTiers_1 = require("../lib/payoutTiers");
-const notifyEmail_1 = require("../lib/notifyEmail");
 exports.dashboardRouter = (0, express_1.Router)();
 exports.dashboardRouter.use(auth_1.requireAuth);
 /** Completed points for one contributor cycle (same basis as GET /leaderboard for that period). */
@@ -50,6 +49,57 @@ function canViewPayoutComments(userRole, doc, userId) {
 }
 function canPostPayoutComment(userRole, doc, userId) {
     return canViewPayoutComments(userRole, doc, userId);
+}
+function docOwnerId(doc) {
+    const raw = doc.submittedBy;
+    if (raw && typeof raw === "object" && "_id" in raw) {
+        return String(raw._id);
+    }
+    return raw != null ? String(raw) : null;
+}
+async function notifyStaffAboutThreadComment(title, message, includeAccounts) {
+    const admins = await User_1.User.find({ role: "admin" }).select("_id");
+    for (const a of admins) {
+        await Notification_1.Notification.create({ user: a._id, title, message });
+    }
+    if (includeAccounts) {
+        const accountsUsers = await User_1.User.find({ role: "accounts" }).select("_id");
+        for (const u of accountsUsers) {
+            await Notification_1.Notification.create({ user: u._id, title, message });
+        }
+    }
+}
+async function notifyInvoiceCommentRecipients(invoice, commenterId, authorName) {
+    const submitterId = docOwnerId(invoice);
+    const eventLabel = invoice.eventName || "reimbursement";
+    const staffMsg = `${authorName} commented on "${eventLabel}" (${invoice.fullName}).`;
+    if (submitterId && commenterId === submitterId) {
+        await notifyStaffAboutThreadComment("New comment on reimbursement", staffMsg, invoice.status === "pending_accounts");
+        return;
+    }
+    if (submitterId && submitterId !== commenterId) {
+        await Notification_1.Notification.create({
+            user: submitterId,
+            title: "New comment on reimbursement",
+            message: `${authorName} commented on your reimbursement for "${eventLabel}".`,
+        });
+    }
+}
+async function notifyPayoutCommentRecipients(doc, commenterId, authorName) {
+    const submitterId = docOwnerId(doc);
+    const cycleLabel = doc.cycleLabel || "payout request";
+    const staffMsg = `${authorName} commented on points payout "${cycleLabel}" (${doc.fullName}).`;
+    if (submitterId && commenterId === submitterId) {
+        await notifyStaffAboutThreadComment("New comment on payout request", staffMsg, doc.status === "pending_accounts");
+        return;
+    }
+    if (submitterId && submitterId !== commenterId) {
+        await Notification_1.Notification.create({
+            user: submitterId,
+            title: "New comment on payout request",
+            message: `${authorName} commented on your points payout (${cycleLabel}).`,
+        });
+    }
 }
 exports.dashboardRouter.get("/overview", async (req, res, next) => {
     try {
@@ -258,7 +308,6 @@ exports.dashboardRouter.post("/tasks/:id/request-assignment", async (req, res, n
                 message: assignReqMsg,
             });
         }
-        (0, notifyEmail_1.queueNotifyUsersByRole)("admin", "Assignment request", assignReqMsg);
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -276,7 +325,9 @@ exports.dashboardRouter.post("/tasks/:id/request-assignment", async (req, res, n
 exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
     try {
         const userId = req.user._id;
+        const actorName = req.user.name || "A contributor";
         const { status: bodyStatus, submission: submissionBody } = req.body;
+        let submittedForReview = false;
         const task = await Task_1.Task.findOne({ _id: req.params.id, assignedTo: userId });
         if (!task) {
             return res.status(404).json({ message: "Task not found or not assigned to you" });
@@ -308,6 +359,7 @@ exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
                     meta: submissionBody && typeof submissionBody === "object" ? { hasSubmission: true } : undefined,
                 });
                 if (nextStatus === "submitted") {
+                    submittedForReview = true;
                     const base = task.submission || {};
                     task.submission = {
                         githubLink: base.githubLink,
@@ -355,6 +407,17 @@ exports.dashboardRouter.patch("/tasks/:id", async (req, res, next) => {
             });
         }
         await task.save();
+        if (submittedForReview) {
+            const submitMsg = `${actorName} submitted "${task.title}" for review.`;
+            const admins = await User_1.User.find({ role: "admin" }).select("_id");
+            for (const a of admins) {
+                await Notification_1.Notification.create({
+                    user: a._id,
+                    title: "Task submitted for review",
+                    message: submitMsg,
+                });
+            }
+        }
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -837,7 +900,6 @@ exports.dashboardRouter.post("/invoices", async (req, res, next) => {
                 message: invMsg,
             });
         }
-        (0, notifyEmail_1.queueNotifyUsersByRole)("admin", "New travel reimbursement submitted", invMsg);
         res.status(201).json(invoice);
     }
     catch (err) {
@@ -1068,7 +1130,6 @@ exports.dashboardRouter.patch("/invoices/:id", async (req, res, next) => {
                     : "Admin rejected travel reimbursement",
                 message: invSubmitterMsg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(invoice.submittedBy, action === "approved" ? "Travel reimbursement approved by admin" : "Travel reimbursement rejected by admin", invSubmitterMsg);
             // Notify all accounts users when admin approves
             if (action === "approved") {
                 const accMsg = `${invoice.fullName} – ${invoice.eventName} – ₹${invoice.totalAmountClaimed}`;
@@ -1080,7 +1141,6 @@ exports.dashboardRouter.patch("/invoices/:id", async (req, res, next) => {
                         message: accMsg,
                     });
                 }
-                (0, notifyEmail_1.queueNotifyUsersByRole)("accounts", "Invoice approved by admin", accMsg);
             }
             const updated = await Invoice_1.Invoice.findById(invoice._id)
                 .populate("submittedBy", "name email role")
@@ -1115,7 +1175,6 @@ exports.dashboardRouter.patch("/invoices/:id", async (req, res, next) => {
                 title: action === "paid" ? "Reimbursement paid" : "Reimbursement rejected by accounts",
                 message: invAcctMsg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(invoice.submittedBy, action === "paid" ? "Reimbursement paid" : "Reimbursement rejected by accounts", invAcctMsg);
             const updated = await Invoice_1.Invoice.findById(invoice._id)
                 .populate("submittedBy", "name email role")
                 .populate("adminReviewedBy", "name email role")
@@ -1184,6 +1243,8 @@ exports.dashboardRouter.post("/invoices/:id/comments", async (req, res, next) =>
         invoice.comments = Array.isArray(invoice.comments) ? invoice.comments : [];
         invoice.comments.push(comment);
         await invoice.save();
+        const authorName = req.user.name || "Someone";
+        await notifyInvoiceCommentRecipients(invoice, req.user._id.toString(), authorName);
         const updated = await Invoice_1.Invoice.findById(invoice._id).populate("comments.author", "name email avatar role");
         res.status(201).json(updated.comments?.slice(-1)?.[0] ?? null);
     }
@@ -1311,7 +1372,6 @@ exports.dashboardRouter.post("/payout-requests", async (req, res, next) => {
                 message: payoutNewMsg,
             });
         }
-        (0, notifyEmail_1.queueNotifyUsersByRole)("admin", "New points payout request", payoutNewMsg);
         const populated = await PayoutRequest_1.PayoutRequest.findById(doc._id)
             .populate("submittedBy", "name email role")
             .populate("contributorPeriod", "sequence label startedAt endedAt");
@@ -1450,7 +1510,6 @@ exports.dashboardRouter.patch("/payout-requests/:id", async (req, res, next) => 
                 title: action === "approved" ? "Points payout approved by admin" : "Points payout rejected by admin",
                 message: payoutAdminMsg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(doc.submittedBy, action === "approved" ? "Points payout approved by admin" : "Points payout rejected by admin", payoutAdminMsg);
             if (action === "approved") {
                 const pAccMsg = `${doc.fullName} – ${doc.cycleLabel} – ₹${doc.requestedPayoutINR}`;
                 const accountsUsers = await User_1.User.find({ role: "accounts" }).select("_id");
@@ -1461,7 +1520,6 @@ exports.dashboardRouter.patch("/payout-requests/:id", async (req, res, next) => 
                         message: pAccMsg,
                     });
                 }
-                (0, notifyEmail_1.queueNotifyUsersByRole)("accounts", "Points payout approved — needs accounts", pAccMsg);
             }
             const updated = await PayoutRequest_1.PayoutRequest.findById(doc._id)
                 .populate("submittedBy", "name email role")
@@ -1497,7 +1555,6 @@ exports.dashboardRouter.patch("/payout-requests/:id", async (req, res, next) => 
                 title: action === "paid" ? "Points payout marked paid" : "Points payout rejected by accounts",
                 message: payoutAcctMsg,
             });
-            (0, notifyEmail_1.queueNotifyUserByEmail)(doc.submittedBy, action === "paid" ? "Points payout marked paid" : "Points payout rejected by accounts", payoutAcctMsg);
             const updated = await PayoutRequest_1.PayoutRequest.findById(doc._id)
                 .populate("submittedBy", "name email role")
                 .populate("contributorPeriod", "sequence label startedAt endedAt")
@@ -1565,6 +1622,8 @@ exports.dashboardRouter.post("/payout-requests/:id/comments", async (req, res, n
         doc.comments = Array.isArray(doc.comments) ? doc.comments : [];
         doc.comments.push(comment);
         await doc.save();
+        const authorName = req.user.name || "Someone";
+        await notifyPayoutCommentRecipients(doc, req.user._id.toString(), authorName);
         const updated = await PayoutRequest_1.PayoutRequest.findById(doc._id).populate("comments.author", "name email avatar role");
         res.status(201).json(updated.comments?.slice(-1)?.[0] ?? null);
     }
