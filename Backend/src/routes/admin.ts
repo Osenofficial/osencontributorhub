@@ -91,7 +91,25 @@ adminRouter.get("/stats", requireRole("admin", "lead"), async (_req: AuthRequest
 adminRouter.get("/users", requireRole("admin", "lead"), async (_req: AuthRequest, res, next) => {
   try {
     const users = await User.find().sort({ createdAt: -1 }).select("-passwordHash");
-    res.json(users);
+    const activeStatuses = ["todo", "in_progress", "submitted"];
+    const counts = await Task.aggregate([
+      {
+        $match: {
+          assignedTo: { $ne: null },
+          status: { $in: activeStatuses },
+        },
+      },
+      { $group: { _id: "$assignedTo", pendingTaskCount: { $sum: 1 } } },
+    ]);
+    const countMap = new Map<string, number>(
+      counts.map((c) => [String(c._id), c.pendingTaskCount as number]),
+    );
+    const enriched = users.map((u) => ({
+      ...u.toObject(),
+      pendingTaskCount: countMap.get(String(u._id)) ?? 0,
+      activeTaskCount: countMap.get(String(u._id)) ?? 0,
+    }));
+    res.json(enriched);
   } catch (err) {
     next(err);
   }
@@ -313,7 +331,9 @@ const CREATOR_EDIT_FIELDS = [
 ] as const;
 
 function taskCreatedByUser(task: { createdBy: unknown }, userId: unknown) {
-  return String(task.createdBy) === String(userId);
+  const createdBy = task.createdBy as { _id?: unknown } | null | undefined;
+  const creatorId = createdBy?._id ?? task.createdBy;
+  return creatorId != null && String(creatorId) === String(userId);
 }
 
 /** These roles cannot be picked as task assignees (UI + API). */
@@ -326,8 +346,17 @@ function parseAssigneeIdFromBody(assignedTo: unknown): string | null {
 
 async function assigneeValidationError(assigneeId: string | null): Promise<string | null> {
   if (!assigneeId) return null;
-  const u = await User.findById(assigneeId).select("role");
+  const u = await User.findById(assigneeId).select("role status isActive");
   if (!u) return "Assignee not found";
+  if (u.status === "rejected") {
+    return "Rejected users cannot be assigned tasks";
+  }
+  if (u.status === "pending") {
+    return "Pending users cannot be assigned tasks until an admin approves their account";
+  }
+  if (u.status === "suspended" || !u.isActive) {
+    return "Suspended users cannot be assigned tasks";
+  }
   if ((ROLES_EXCLUDED_FROM_TASK_ASSIGNMENT as readonly string[]).includes(String(u.role))) {
     return "Accounts and evangelist users cannot be assigned tasks";
   }
@@ -392,16 +421,17 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
 
     const isAdmin = req.user!.role === "admin";
     const isLead = req.user!.role === "lead";
+    const leadOwnsTask = isLead && taskCreatedByUser(task, req.user!._id);
 
     const hasCreatorUpdates = CREATOR_EDIT_FIELDS.some((k) => req.body[k] !== undefined);
     const leadSelfAssignOnly = isLeadSelfAssignOnlyPatch(req, req.body, task);
 
     if (hasCreatorUpdates) {
-      if (isLead && !leadSelfAssignOnly) {
+      if (isLead && !leadSelfAssignOnly && !leadOwnsTask) {
         return res.status(403).json({
           code: "LEAD_REQUIRES_APPROVAL",
           message:
-            "Leads cannot edit tasks directly. Submit an edit request from the Tasks panel — an admin must approve before changes apply.",
+            "Leads cannot edit tasks they did not create. Submit an edit request from the Tasks panel — an admin must approve before changes apply.",
         });
       }
       if (!isLead && !isAdmin && !taskCreatedByUser(task, req.user!._id)) {
@@ -438,11 +468,11 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
 
     const fromStatus = task.status;
     if (req.body.status !== undefined) {
-      if (isLead) {
+      if (isLead && !leadOwnsTask) {
         return res.status(403).json({
           code: "LEAD_REQUIRES_APPROVAL",
           message:
-            "Leads cannot approve or reject submissions directly. Submit a request from the Tasks panel — an admin must approve.",
+            "Leads cannot approve or reject submissions on tasks they did not create. Submit a request from the Tasks panel — an admin must approve.",
         });
       }
       const nextStatus = req.body.status as (typeof task)["status"];
@@ -527,18 +557,18 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
   }
 });
 
-/** Only admins may hard-delete. Leads must use POST /lead-action-requests (type: delete_task). */
+/** Admins may delete any task. Leads may delete tasks they created. */
 adminRouter.delete("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
-    if (req.user!.role !== "admin") {
+    if (req.user!.role !== "admin" && !taskCreatedByUser(task, req.user!._id)) {
       return res.status(403).json({
         code: "LEAD_REQUIRES_APPROVAL",
         message:
-          "Leads cannot delete tasks directly. Submit a delete request from the panel — an admin must approve it.",
+          "Leads can only delete tasks they created. Submit a delete request for other tasks — an admin must approve it.",
       });
     }
     const assigneeId = task.assignedTo;
@@ -571,8 +601,8 @@ adminRouter.get("/pending-assignment-requests", requireRole("admin", "lead"), as
   }
 });
 
-/** Approve one contributor — assign task to them and clear pending requests. Admin only (leads cannot assign from pool without approval). */
-adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin"), async (req: AuthRequest, res, next) => {
+/** Approve one contributor — assign task to them and clear pending requests. */
+adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const { userId } = req.body as { userId?: string };
     if (!userId || String(userId).trim() === "") {
@@ -627,7 +657,7 @@ adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin"), async (r
 });
 
 /** Remove one user's request without assigning (decline). Admin only. */
-adminRouter.post("/tasks/:id/reject-assignment", requireRole("admin"), async (req: AuthRequest, res, next) => {
+adminRouter.post("/tasks/:id/reject-assignment", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const { userId } = req.body as { userId?: string };
     if (!userId) {

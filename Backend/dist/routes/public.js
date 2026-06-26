@@ -4,6 +4,7 @@ exports.publicRouter = void 0;
 const express_1 = require("express");
 const User_1 = require("../models/User");
 const Task_1 = require("../models/Task");
+const userAvatar_1 = require("../lib/userAvatar");
 exports.publicRouter = (0, express_1.Router)();
 /** Aligned with Frontend tier table: top payout at 181+ pts. */
 const MONTHLY_POINT_CAP = 181;
@@ -61,18 +62,10 @@ exports.publicRouter.get("/leaderboard", async (_req, res, next) => {
             },
         ]);
         const withAvatar = leaderboard.map((u, i) => {
-            const initials = u.name
-                ?.trim()
-                .split(/\s+/)
-                .map((s) => s[0])
-                .slice(0, 2)
-                .join("")
-                .toUpperCase() || "?";
-            const avatar = u.avatar ||
-                `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.email || u.name || "u")}&backgroundColor=8b5cf6,6366f1,3b82f6`;
+            const initials = (0, userAvatar_1.normalizeAvatarField)(u.name, u.avatar);
             return {
                 ...u,
-                avatar: avatar.startsWith("http") ? avatar : initials,
+                avatar: initials,
                 initials,
                 rank: i + 1,
             };

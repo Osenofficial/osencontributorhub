@@ -10,6 +10,7 @@ export interface ITaskSubmission {
   notionLink?: string;
   comments?: string;
   submittedAt?: Date;
+  completedDate?: Date;
 }
 
 export interface ITaskHistoryEntry {
@@ -44,6 +45,12 @@ export interface ITask extends Document {
   pendingAssignmentRequests?: IPendingAssignmentRequest[];
   /** Admin-controlled program cycle; set when the task is created. */
   contributorPeriod?: Types.ObjectId;
+  /** Original points before overdue penalty (30% reduction). */
+  basePoints?: number;
+  /** Set when 1-hour deadline reminder email/notification was sent. */
+  deadlineReminderSentAt?: Date;
+  /** Set when overdue 30% point penalty was applied. */
+  overduePenaltyApplied?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,6 +86,7 @@ const TaskSchema = new Schema<ITask>(
       notionLink: String,
       comments: String,
       submittedAt: Date,
+      completedDate: Date,
     },
     history: [
       {
@@ -100,6 +108,9 @@ const TaskSchema = new Schema<ITask>(
       default: [],
     },
     contributorPeriod: { type: Schema.Types.ObjectId, ref: "ContributorPeriod", index: true },
+    basePoints: { type: Number, min: 0 },
+    deadlineReminderSentAt: { type: Date },
+    overduePenaltyApplied: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );

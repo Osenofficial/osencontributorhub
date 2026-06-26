@@ -64,5 +64,7 @@ const UserSchema = new mongoose_1.Schema({
     isActive: { type: Boolean, default: true, index: true },
     status: { type: String, enum: ["pending", "active", "rejected", "suspended"], default: "pending", index: true },
     lastLoginAt: { type: Date },
+    passwordResetTokenHash: { type: String, select: false },
+    passwordResetExpires: { type: Date, select: false },
 }, { timestamps: true });
 exports.User = mongoose_1.default.models.User || mongoose_1.default.model("User", UserSchema);

@@ -1,16 +1,15 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import { User } from "../models/User";
 import { Task } from "../models/Task";
 import { Notification } from "../models/Notification";
 import { generateToken, requireAuth, AuthRequest } from "../middleware/auth";
+import { sendMail } from "../lib/mail";
+import { getEmailAppName } from "../lib/emailTemplate";
+import { initialsFromName, normalizeAvatarField } from "../lib/userAvatar";
 
 export const authRouter = Router();
-
-function getAvatarForUser(name: string, email: string): string {
-  const seed = encodeURIComponent(email || name || "user");
-  return `https://api.dicebear.com/7.x/initials/svg?seed=${seed}&backgroundColor=8b5cf6,6366f1,3b82f6`;
-}
 
 async function getUserWithPoints(userId: any) {
   const [user, completedTasks] = await Promise.all([
@@ -20,21 +19,15 @@ async function getUserWithPoints(userId: any) {
   if (!user) return null;
   const points = completedTasks.reduce((sum, t) => sum + (t.points || 0), 0);
   const tasksCompleted = completedTasks.length;
-  const initials = user.name
-    .trim()
-    .split(/\s+/)
-    .map((s: string) => s[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase() || "?";
+  const initials = normalizeAvatarField(user.name, user.avatar);
   return {
     id: user._id,
     name: user.name,
     email: user.email,
     role: user.role,
     status: user.status,
-    avatar: user.avatar || getAvatarForUser(user.name, user.email),
-    initials: user.avatar?.length <= 3 ? user.avatar : initials,
+    avatar: initials,
+    initials,
     points,
     tasksCompleted,
     rank: 0,
@@ -47,11 +40,26 @@ async function getUserWithPoints(userId: any) {
   };
 }
 
+function hashResetToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function getFrontendBaseUrl(): string {
+  return (
+    process.env.FRONTEND_URL?.trim() ||
+    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+    "http://localhost:3000"
+  ).replace(/\/$/, "");
+}
+
 authRouter.post("/register", async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email and password are required" });
+    }
+    if (String(password).length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
     }
 
     const existing = await User.findOne({ email });
@@ -59,7 +67,7 @@ authRouter.post("/register", async (req, res, next) => {
       return res.status(400).json({ message: "Email already in use" });
     }
 
-    const avatar = getAvatarForUser(name, email);
+    const avatar = initialsFromName(name);
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await User.create({
       name,
@@ -167,7 +175,6 @@ authRouter.get("/me", requireAuth, async (req: AuthRequest, res, next) => {
   }
 });
 
-// Update profile preferences (position + interests)
 authRouter.patch("/me", requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
@@ -207,3 +214,69 @@ authRouter.patch("/me", requireAuth, async (req: AuthRequest, res, next) => {
   }
 });
 
+authRouter.post("/forgot-password", async (req, res, next) => {
+  try {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email }).select("+passwordResetTokenHash +passwordResetExpires");
+    const genericMessage =
+      "If an account exists for that email, we sent a reset link. Check your inbox (and spam).";
+
+    if (!user || user.status === "rejected") {
+      return res.json({ message: genericMessage });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    user.passwordResetTokenHash = hashResetToken(token);
+    user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+    await user.save();
+
+    const resetUrl = `${getFrontendBaseUrl()}/reset-password?token=${encodeURIComponent(token)}`;
+    const appName = getEmailAppName();
+    await sendMail({
+      to: user.email,
+      subject: `[${appName}] Reset your password`,
+      text: `Reset your password: ${resetUrl}\n\nThis link expires in 1 hour. If you didn't request this, ignore this email.`,
+      html: `<p>Hi ${user.name},</p><p><a href="${resetUrl}">Reset your password</a></p><p>This link expires in 1 hour.</p>`,
+    });
+
+    res.json({ message: genericMessage });
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRouter.post("/reset-password", async (req, res, next) => {
+  try {
+    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!token || !password) {
+      return res.status(400).json({ message: "Token and new password are required" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    }
+
+    const tokenHash = hashResetToken(token);
+    const user = await User.findOne({
+      passwordResetTokenHash: tokenHash,
+      passwordResetExpires: { $gt: new Date() },
+    }).select("+passwordResetTokenHash +passwordResetExpires");
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired reset link. Request a new one." });
+    }
+
+    user.passwordHash = await bcrypt.hash(password, 10);
+    user.passwordResetTokenHash = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    res.json({ message: "Password updated. You can sign in with your new password." });
+  } catch (err) {
+    next(err);
+  }
+});

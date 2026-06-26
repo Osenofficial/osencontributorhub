@@ -2,6 +2,7 @@ import "dotenv/config";
 import dns from "node:dns";
 import { connectDB } from "./lib/db";
 import { logMailStartupStatus } from "./lib/mail";
+import { startTaskDeadlineScheduler } from "./jobs/taskDeadlineJob";
 import { app } from "./app";
 
 // Gmail and others expose IPv6 (AAAA). Many hosts (e.g. Render) have no IPv6 egress → ENETUNREACH on :587.
@@ -15,6 +16,7 @@ async function start() {
   try {
     await connectDB();
     logMailStartupStatus();
+    startTaskDeadlineScheduler();
     app.listen(PORT, () => {
       console.log(`Server listening on http://localhost:${PORT}`);
     });

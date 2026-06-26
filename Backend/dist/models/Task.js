@@ -65,6 +65,7 @@ const TaskSchema = new mongoose_1.Schema({
         notionLink: String,
         comments: String,
         submittedAt: Date,
+        completedDate: Date,
     },
     history: [
         {
@@ -86,5 +87,8 @@ const TaskSchema = new mongoose_1.Schema({
         default: [],
     },
     contributorPeriod: { type: mongoose_1.Schema.Types.ObjectId, ref: "ContributorPeriod", index: true },
+    basePoints: { type: Number, min: 0 },
+    deadlineReminderSentAt: { type: Date },
+    overduePenaltyApplied: { type: Boolean, default: false, index: true },
 }, { timestamps: true });
 exports.Task = mongoose_1.default.models.Task || mongoose_1.default.model("Task", TaskSchema);

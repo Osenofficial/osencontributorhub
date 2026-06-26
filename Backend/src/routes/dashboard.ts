@@ -10,6 +10,7 @@ import { PayoutRequest } from "../models/PayoutRequest";
 import { ContributorPeriod } from "../models/ContributorPeriod";
 import { ensureActiveContributorPeriod } from "../lib/contributorPeriodService";
 import { getPayoutForPoints, MIN_POINTS_FOR_PAYOUT } from "../lib/payoutTiers";
+import { normalizeAvatarField } from "../lib/userAvatar";
 
 export const dashboardRouter = Router();
 
@@ -180,7 +181,7 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
 dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
-    const { title, description, contributionType, category, points, githubLink, notionLink, googleDoc, comments } = req.body;
+    const { title, description, contributionType, category, points, githubLink, notionLink, googleDoc, comments, completedDate } = req.body;
 
     if (!title || !contributionType) {
       return res.status(400).json({ message: "Title and contribution type are required" });
@@ -205,6 +206,7 @@ dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
         googleDoc: googleDoc || "",
         comments: comments || "",
         submittedAt: new Date(),
+        completedDate: completedDate ? new Date(String(completedDate)) : new Date(),
       },
       history: [
         {
@@ -746,21 +748,10 @@ dashboardRouter.get("/leaderboard", async (req: AuthRequest, res, next) => {
     ]);
 
     const withAvatar = leaderboard.map((u: any, i: number) => {
-      const initials =
-        u.name
-          ?.trim()
-          .split(/\s+/)
-          .map((s: string) => s[0])
-          .slice(0, 2)
-          .join("")
-          .toUpperCase() || "?";
-      const avatarUrl =
-        u.avatar?.startsWith?.("http")
-          ? u.avatar
-          : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.email || u.name || "u")}&backgroundColor=8b5cf6,6366f1,3b82f6`;
+      const initials = normalizeAvatarField(u.name, u.avatar);
       return {
         ...u,
-        avatar: avatarUrl,
+        avatar: initials,
         initials,
         rank: i + 1,
       };

@@ -9,8 +9,9 @@ exports.requireRole = requireRole;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || "30d");
 function generateToken(user) {
-    return jsonwebtoken_1.default.sign({ sub: user._id.toString(), role: user.role, email: user.email }, JWT_SECRET, { expiresIn: "7d" });
+    return jsonwebtoken_1.default.sign({ sub: user._id.toString(), role: user.role, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -23,6 +24,11 @@ async function requireAuth(req, res, next) {
         const user = await User_1.User.findById(payload.sub);
         if (!user) {
             return res.status(401).json({ message: "User not found" });
+        }
+        if (user.role !== "admin" && user.role !== "accounts") {
+            if (user.status === "rejected" || user.status === "suspended" || !user.isActive) {
+                return res.status(403).json({ message: "Account is not active" });
+            }
         }
         req.user = user;
         next();

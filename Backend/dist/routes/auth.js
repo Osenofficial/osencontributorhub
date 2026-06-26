@@ -6,15 +6,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authRouter = void 0;
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const node_crypto_1 = __importDefault(require("node:crypto"));
 const User_1 = require("../models/User");
 const Task_1 = require("../models/Task");
 const Notification_1 = require("../models/Notification");
 const auth_1 = require("../middleware/auth");
+const mail_1 = require("../lib/mail");
+const emailTemplate_1 = require("../lib/emailTemplate");
+const userAvatar_1 = require("../lib/userAvatar");
 exports.authRouter = (0, express_1.Router)();
-function getAvatarForUser(name, email) {
-    const seed = encodeURIComponent(email || name || "user");
-    return `https://api.dicebear.com/7.x/initials/svg?seed=${seed}&backgroundColor=8b5cf6,6366f1,3b82f6`;
-}
 async function getUserWithPoints(userId) {
     const [user, completedTasks] = await Promise.all([
         User_1.User.findById(userId).select("-passwordHash"),
@@ -24,21 +24,15 @@ async function getUserWithPoints(userId) {
         return null;
     const points = completedTasks.reduce((sum, t) => sum + (t.points || 0), 0);
     const tasksCompleted = completedTasks.length;
-    const initials = user.name
-        .trim()
-        .split(/\s+/)
-        .map((s) => s[0])
-        .slice(0, 2)
-        .join("")
-        .toUpperCase() || "?";
+    const initials = (0, userAvatar_1.normalizeAvatarField)(user.name, user.avatar);
     return {
         id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
         status: user.status,
-        avatar: user.avatar || getAvatarForUser(user.name, user.email),
-        initials: user.avatar?.length <= 3 ? user.avatar : initials,
+        avatar: initials,
+        initials,
         points,
         tasksCompleted,
         rank: 0,
@@ -50,17 +44,28 @@ async function getUserWithPoints(userId) {
         createdAt: user.createdAt,
     };
 }
+function hashResetToken(token) {
+    return node_crypto_1.default.createHash("sha256").update(token).digest("hex");
+}
+function getFrontendBaseUrl() {
+    return (process.env.FRONTEND_URL?.trim() ||
+        process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+        "http://localhost:3000").replace(/\/$/, "");
+}
 exports.authRouter.post("/register", async (req, res, next) => {
     try {
         const { name, email, password } = req.body;
         if (!name || !email || !password) {
             return res.status(400).json({ message: "Name, email and password are required" });
         }
+        if (String(password).length < 8) {
+            return res.status(400).json({ message: "Password must be at least 8 characters" });
+        }
         const existing = await User_1.User.findOne({ email });
         if (existing) {
             return res.status(400).json({ message: "Email already in use" });
         }
-        const avatar = getAvatarForUser(name, email);
+        const avatar = (0, userAvatar_1.initialsFromName)(name);
         const passwordHash = await bcryptjs_1.default.hash(password, 10);
         const user = await User_1.User.create({
             name,
@@ -158,7 +163,6 @@ exports.authRouter.get("/me", auth_1.requireAuth, async (req, res, next) => {
         next(err);
     }
 });
-// Update profile preferences (position + interests)
 exports.authRouter.patch("/me", auth_1.requireAuth, async (req, res, next) => {
     try {
         const userId = req.user._id;
@@ -176,6 +180,63 @@ exports.authRouter.patch("/me", auth_1.requireAuth, async (req, res, next) => {
         }, { new: true, runValidators: true });
         const fullUser = await getUserWithPoints(updated._id);
         res.json(fullUser);
+    }
+    catch (err) {
+        next(err);
+    }
+});
+exports.authRouter.post("/forgot-password", async (req, res, next) => {
+    try {
+        const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+        if (!email) {
+            return res.status(400).json({ message: "Email is required" });
+        }
+        const user = await User_1.User.findOne({ email }).select("+passwordResetTokenHash +passwordResetExpires");
+        const genericMessage = "If an account exists for that email, we sent a reset link. Check your inbox (and spam).";
+        if (!user || user.status === "rejected") {
+            return res.json({ message: genericMessage });
+        }
+        const token = node_crypto_1.default.randomBytes(32).toString("hex");
+        user.passwordResetTokenHash = hashResetToken(token);
+        user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+        await user.save();
+        const resetUrl = `${getFrontendBaseUrl()}/reset-password?token=${encodeURIComponent(token)}`;
+        const appName = (0, emailTemplate_1.getEmailAppName)();
+        await (0, mail_1.sendMail)({
+            to: user.email,
+            subject: `[${appName}] Reset your password`,
+            text: `Reset your password: ${resetUrl}\n\nThis link expires in 1 hour. If you didn't request this, ignore this email.`,
+            html: `<p>Hi ${user.name},</p><p><a href="${resetUrl}">Reset your password</a></p><p>This link expires in 1 hour.</p>`,
+        });
+        res.json({ message: genericMessage });
+    }
+    catch (err) {
+        next(err);
+    }
+});
+exports.authRouter.post("/reset-password", async (req, res, next) => {
+    try {
+        const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+        const password = typeof req.body?.password === "string" ? req.body.password : "";
+        if (!token || !password) {
+            return res.status(400).json({ message: "Token and new password are required" });
+        }
+        if (password.length < 8) {
+            return res.status(400).json({ message: "Password must be at least 8 characters" });
+        }
+        const tokenHash = hashResetToken(token);
+        const user = await User_1.User.findOne({
+            passwordResetTokenHash: tokenHash,
+            passwordResetExpires: { $gt: new Date() },
+        }).select("+passwordResetTokenHash +passwordResetExpires");
+        if (!user) {
+            return res.status(400).json({ message: "Invalid or expired reset link. Request a new one." });
+        }
+        user.passwordHash = await bcryptjs_1.default.hash(password, 10);
+        user.passwordResetTokenHash = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save();
+        res.json({ message: "Password updated. You can sign in with your new password." });
     }
     catch (err) {
         next(err);

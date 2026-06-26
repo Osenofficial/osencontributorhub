@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
+import jwt, { type SignOptions } from "jsonwebtoken";
 import { User, IUser, UserRole } from "../models/User";
+import { normalizeAvatarField } from "../lib/userAvatar";
 
 export interface AuthRequest extends Request {
   user?: IUser;
@@ -8,11 +9,13 @@ export interface AuthRequest extends Request {
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || "30d") as SignOptions["expiresIn"];
+
 export function generateToken(user: IUser) {
   return jwt.sign(
     { sub: user._id.toString(), role: user.role, email: user.email },
     JWT_SECRET,
-    { expiresIn: "7d" }
+    { expiresIn: JWT_EXPIRES_IN }
   );
 }
 
@@ -29,6 +32,11 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     const user = await User.findById(payload.sub);
     if (!user) {
       return res.status(401).json({ message: "User not found" });
+    }
+    if (user.role !== "admin" && user.role !== "accounts") {
+      if (user.status === "rejected" || user.status === "suspended" || !user.isActive) {
+        return res.status(403).json({ message: "Account is not active" });
+      }
     }
     req.user = user;
     next();
