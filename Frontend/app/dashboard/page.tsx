@@ -107,7 +107,7 @@ export default function DashboardPage() {
 
       <div className="relative flex-1">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-primary/[0.07] to-transparent" />
-        <div className="relative mx-auto max-w-6xl space-y-8 px-4 pb-10 pt-2 sm:px-6 lg:px-8">
+        <div className="relative mx-auto max-w-6xl space-y-8 page-container !pt-4">
           {/* Hero */}
           <section className="overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-card/90 via-card/60 to-primary/[0.06] p-6 shadow-lg shadow-primary/5 sm:p-8">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">

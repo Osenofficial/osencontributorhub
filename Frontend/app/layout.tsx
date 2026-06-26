@@ -3,6 +3,7 @@ import { Space_Grotesk, JetBrains_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { AppProvider } from '@/lib/app-context'
+import { Toaster } from '@/components/ui/sonner'
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ['latin'],
@@ -16,10 +17,10 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'OSEN Contributor Hub',
-  description: 'Manage Tasks. Empower Contributors. Build Together.',
-  generator: 'v0.app',
+  description: 'Manage tasks, track points, and get paid for your contributions.',
   icons: {
-    icon: '/icon.svg',
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple: [{ url: '/icon.svg', type: 'image/svg+xml' }],
   },
 }
 
@@ -33,6 +34,7 @@ export default function RootLayout({
       <body className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
         <AppProvider>
           {children}
+          <Toaster />
           <Analytics />
         </AppProvider>
       </body>

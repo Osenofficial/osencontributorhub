@@ -2,7 +2,8 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import type { User } from '@/lib/data'
-import { loginApi, meApi, registerApi, type AuthUser } from '@/lib/api'
+import { loginApi, meApi, registerApi, type AuthUser, saveAuthToken, removeAuthToken } from '@/lib/api'
+import { getAuthToken } from '@/lib/auth-token'
 
 interface AppContextValue {
   currentUser: User | null
@@ -22,15 +23,19 @@ function mapAuthUserToUser(auth: AuthUser): User {
       .split(/\s+/)
       .map((s) => s[0])
       .slice(0, 2)
-      .join("")
-      .toUpperCase() || "?"
+      .join('')
+      .toUpperCase() || '?'
+  const avatarInitials =
+    auth.avatar && !auth.avatar.includes('dicebear.com') && !auth.avatar.startsWith('http')
+      ? auth.avatar
+      : (auth as any).initials ?? initials
   return {
     id: auth.id,
     name: auth.name,
     email: auth.email,
     role: auth.role as User['role'],
-    avatar: (auth as any).initials ?? auth.avatar ?? initials,
-    avatarSrc: auth.avatar?.startsWith('http') ? auth.avatar : undefined,
+    avatar: avatarInitials,
+    avatarSrc: undefined,
     points: auth.points ?? 0,
     tasksCompleted: auth.tasksCompleted ?? 0,
     rank: auth.rank ?? 0,
@@ -48,7 +53,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const token = window.localStorage.getItem('token')
+    const token = getAuthToken()
     if (!token) {
       setLoading(false)
       return
@@ -57,17 +62,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     meApi()
       .then((u) => setCurrentUser(mapAuthUserToUser(u)))
       .catch(() => {
-        window.localStorage.removeItem('token')
-        setCurrentUser(null)
+        if (!getAuthToken()) {
+          setCurrentUser(null)
+        }
       })
       .finally(() => setLoading(false))
   }, [])
 
   async function handleLogin(email: string, password: string) {
     const { token, user } = await loginApi(email, password)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('token', token)
-    }
+    saveAuthToken(token)
     setCurrentUser(mapAuthUserToUser(user))
   }
 
@@ -77,20 +81,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   async function refreshUser() {
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null
+    const token = getAuthToken()
     if (!token) return
     try {
       const u = await meApi()
       setCurrentUser(mapAuthUserToUser(u))
     } catch {
-      setCurrentUser(null)
+      if (!getAuthToken()) setCurrentUser(null)
     }
   }
 
   function handleLogout() {
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('token')
-    }
+    removeAuthToken()
     setCurrentUser(null)
   }
 

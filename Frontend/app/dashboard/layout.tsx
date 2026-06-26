@@ -34,8 +34,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   if (loading || !currentUser) {
     return (
-      <div className="flex h-dvh items-center justify-center bg-background">
-        <div className="text-sm text-muted-foreground">Loading dashboard...</div>
+      <div className="flex h-dvh flex-col items-center justify-center gap-4 bg-background">
+        <div className="flex size-12 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 shadow-lg shadow-primary/10">
+          <div className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        </div>
+        <p className="text-sm text-muted-foreground">Loading your dashboard…</p>
       </div>
     )
   }
@@ -48,7 +51,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       </div>
       {/* Main: min-h-0 + overscroll avoids scroll chaining / jump; pb reserves space for fixed mobile nav */}
       {/* Extra bottom padding on mobile so content clears the fixed bottom nav + iOS home indicator */}
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] scroll-pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))] md:pb-0 md:scroll-pb-0 [scrollbar-gutter:stable]">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] scroll-pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0 md:scroll-pb-0 [scrollbar-gutter:stable]">
         {children}
       </main>
       {/* Mobile bottom nav */}

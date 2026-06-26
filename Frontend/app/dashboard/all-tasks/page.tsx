@@ -13,8 +13,9 @@ import {
   Pencil,
   Send,
   PlayCircle,
+  Clock,
+  Zap,
 } from 'lucide-react'
-import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -40,6 +41,8 @@ import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
+import { DashboardPageShell, PageCard } from '@/components/dashboard-page-shell'
+import { toIsoLocalDate } from '@/lib/date-utils'
 
 function formatDateLabel(iso: string) {
   if (!iso) return ''
@@ -50,13 +53,6 @@ function formatDateLabel(iso: string) {
     month: 'short',
     year: 'numeric',
   })
-}
-
-function toIsoLocalDate(d: Date) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
 }
 
 function userHasPendingAssignment(task: any, userId: string | undefined) {
@@ -80,10 +76,24 @@ function getLatestRejectComment(task: any): string {
   return ''
 }
 
-export default function AllTasksPage() {
+export type AllTasksViewProps = {
+  pageTitle?: string
+  pageDescription?: string
+  defaultFilter?: string
+  lockFilter?: boolean
+  hideBackLink?: boolean
+}
+
+export function AllTasksView({
+  pageTitle = 'All tasks',
+  pageDescription = 'Browse the full program task list — open pool tasks, assignments, and submissions.',
+  defaultFilter = 'all',
+  lockFilter = false,
+  hideBackLink = false,
+}: AllTasksViewProps = {}) {
   const { currentUser } = useApp()
   const [taskFeed, setTaskFeed] = useState<any[]>([])
-  const [taskFeedFilter, setTaskFeedFilter] = useState<string>('all')
+  const [taskFeedFilter, setTaskFeedFilter] = useState<string>(defaultFilter)
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
   const [claimingId, setClaimingId] = useState<string | null>(null)
@@ -147,14 +157,19 @@ export default function AllTasksPage() {
   const filteredTaskFeed = useMemo(() => {
     const uid = currentUser?.id
     return taskFeed.filter((task: any) => {
-      if (taskFeedFilter !== 'all') {
+      const aid = task.assignedTo?._id ?? task.assignedTo
+      const assigneeStr = aid != null ? String(aid) : ''
+      const mine = uid != null && assigneeStr === String(uid)
+
+      if (lockFilter && !mine) return false
+
+      const effectiveFilter = lockFilter && taskFeedFilter === 'assigned_to_me' ? 'all' : taskFeedFilter
+
+      if (effectiveFilter !== 'all') {
         const isPool = task.status === 'todo' && !task.assignedTo
-        const aid = task.assignedTo?._id ?? task.assignedTo
-        const assigneeStr = aid != null ? String(aid) : ''
-        const mine = uid != null && assigneeStr === String(uid)
 
         let statusOk = true
-        switch (taskFeedFilter) {
+        switch (effectiveFilter) {
           case 'unassigned':
             statusOk = isPool
             break
@@ -185,7 +200,7 @@ export default function AllTasksPage() {
         if (!statusOk) return false
       }
 
-      if (dateFrom || dateTo) {
+      if (!lockFilter && (dateFrom || dateTo)) {
         let from = dateFrom
         let to = dateTo
         if (from && to && from > to) {
@@ -209,7 +224,7 @@ export default function AllTasksPage() {
 
       return true
     })
-  }, [taskFeed, taskFeedFilter, currentUser?.id, dateFrom, dateTo])
+  }, [taskFeed, taskFeedFilter, currentUser?.id, dateFrom, dateTo, lockFilter])
 
   function handleClaimTask(taskId: string, onSuccess?: () => void) {
     setClaimingId(taskId)
@@ -301,22 +316,46 @@ export default function AllTasksPage() {
           minute: '2-digit',
         })
       : '—'
+    const deadlineStr = task.deadline
+      ? new Date(task.deadline).toLocaleString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : null
+    const isOverdue =
+      task.deadline &&
+      new Date(task.deadline).getTime() < Date.now() &&
+      !['completed', 'submitted'].includes(task.status)
+    const pointsLabel =
+      task.overduePenaltyApplied && task.basePoints
+        ? `${task.points} pts (−30%)`
+        : `${task.points ?? 0} pts`
 
     return (
       <Card
         className={cn(
-          'flex h-full flex-col gap-0 overflow-hidden border-2 py-0 shadow-md transition-all hover:shadow-lg',
+          'group flex h-full flex-col gap-0 overflow-hidden border py-0 shadow-sm transition-all hover:border-primary/30 hover:shadow-md',
           isPool
-            ? 'border-amber-500/40 bg-gradient-to-b from-amber-500/[0.06] to-card'
-            : 'border-border/80 bg-card',
+            ? 'border-amber-500/35 bg-gradient-to-b from-amber-500/[0.07] to-card'
+            : isOverdue
+              ? 'border-destructive/40 bg-destructive/[0.03]'
+              : 'border-border/70 bg-card/80',
         )}
       >
-        <CardHeader className="space-y-2 border-b border-border/50 bg-muted/20 px-4 pb-3 pt-4">
+        <CardHeader className="space-y-3 border-b border-border/40 bg-muted/15 px-4 pb-3 pt-4">
           <div className="flex items-start justify-between gap-2">
-            <CardTitle className="line-clamp-2 text-left text-base font-semibold leading-snug">{task.title}</CardTitle>
+            <CardTitle className="line-clamp-2 text-left text-base font-semibold leading-snug tracking-tight">
+              {task.title}
+            </CardTitle>
+            <span className="shrink-0 rounded-lg bg-primary/10 px-2 py-1 text-xs font-bold text-primary">
+              {pointsLabel}
+            </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <StatusBadge value={task.category} type="category" />
+            <StatusBadge value={task.priority} type="priority" />
             <StatusBadge value={task.status} type="status" />
             {task.contributorPeriod && (
               <span className="inline-flex items-center rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-800 dark:text-violet-200">
@@ -332,17 +371,32 @@ export default function AllTasksPage() {
           </div>
         </CardHeader>
 
-        <CardContent className="grid flex-1 gap-2 px-4 py-4 text-xs">
-          <div className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1 rounded-lg border border-border/40 bg-background/50 p-2.5">
+        <CardContent className="grid flex-1 gap-2 px-4 py-3 text-xs">
+          <div className="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-2 rounded-xl border border-border/35 bg-background/60 p-3">
             <span className="text-muted-foreground">From</span>
             <span className="font-medium text-foreground">{createdBy?.name ?? '—'}</span>
             <span className="text-muted-foreground">{isPool ? 'Type' : 'Assignee'}</span>
             <span className={cn('font-medium', isPool ? 'text-amber-600 dark:text-amber-400' : 'text-foreground')}>
               {isPool ? 'Open pool' : assignee?.name ?? '—'}
             </span>
+            {deadlineStr && (
+              <>
+                <span className="text-muted-foreground">Due</span>
+                <span className={cn('inline-flex items-center gap-1 font-medium', isOverdue ? 'text-destructive' : 'text-foreground')}>
+                  <Clock className="size-3 shrink-0" />
+                  {deadlineStr}
+                  {isOverdue && <span className="text-[10px] uppercase tracking-wide">(overdue)</span>}
+                </span>
+              </>
+            )}
             <span className="text-muted-foreground">Created</span>
             <span className="text-foreground/90">{dateStr}</span>
           </div>
+          {taskAssignedToMe && task.status === 'in_progress' && (
+            <p className="flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-1.5 text-[11px] text-primary">
+              <Zap className="size-3 shrink-0" /> In progress — use pencil to submit proof
+            </p>
+          )}
         </CardContent>
 
         <CardFooter className="mt-auto flex flex-col gap-2 border-t border-border/50 bg-muted/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -426,13 +480,10 @@ export default function AllTasksPage() {
     Boolean(vt?.submission) && (!dialogEditable || !canEditSubmission)
 
   return (
-    <div className="flex min-h-full flex-col">
-      <DashboardTopbar title="All tasks" />
-
-      <div className="relative flex-1">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-primary/[0.07] to-transparent" />
-        <div className="relative mx-auto max-w-7xl space-y-6 px-4 pb-10 pt-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl border-2 border-border/60 bg-card/30 p-4 shadow-sm sm:p-5">
+    <DashboardPageShell title={pageTitle} description={pageDescription} width="full">
+      <div className="space-y-6">
+        {!hideBackLink && (
+          <PageCard className="p-4">
             <Link
               href="/dashboard"
               className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
@@ -440,28 +491,37 @@ export default function AllTasksPage() {
               <ArrowLeft className="size-4" />
               Back to Dashboard
             </Link>
-          </div>
+          </PageCard>
+        )}
 
-          <section className="overflow-hidden rounded-2xl border-2 border-border/60 bg-card/50 shadow-md">
-            <div className="flex flex-col gap-4 border-b border-border/50 bg-muted/30 p-5 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/15 shadow-inner">
-                  <ClipboardList className="size-6 text-primary" />
-                </div>
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="size-4 text-primary" aria-hidden />
-                    <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Program task list</h1>
-                  </div>
-                  <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                    Boxes show each task. Open pool: use{' '}
-                    <strong className="font-medium text-foreground">Request</strong> (an admin approves who gets the
-                    task) or <strong className="font-medium text-foreground">Claim</strong> if you&apos;re an{' '}
-                    <strong className="font-medium text-foreground">admin</strong>.
-                  </p>
-                </div>
+        <PageCard className="overflow-hidden p-0" glow="primary">
+          <div className="flex flex-col gap-4 border-b border-border/50 bg-muted/20 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/15">
+                <ClipboardList className="size-6 text-primary" />
               </div>
-              <div className="flex w-full flex-col gap-3 sm:w-auto sm:min-w-[min(100%,20rem)] sm:shrink-0">
+              <div className="min-w-0 space-y-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-4 text-primary" aria-hidden />
+                  <h2 className="text-lg font-bold tracking-tight sm:text-xl">
+                    {lockFilter ? 'Your assigned work' : 'Program task list'}
+                  </h2>
+                </div>
+                <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                  {lockFilter ? (
+                    <>Tasks assigned to you — start, submit proof, and track review status.</>
+                  ) : (
+                    <>
+                      Open pool: use <strong className="font-medium text-foreground">Request</strong> (admin or lead
+                      approves) or <strong className="font-medium text-foreground">Claim</strong> if you&apos;re an{' '}
+                      <strong className="font-medium text-foreground">admin</strong>.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+            <div className="flex w-full flex-col gap-3 sm:w-auto sm:min-w-[min(100%,20rem)] sm:shrink-0">
+              {!lockFilter && (
                 <div className="space-y-1.5 rounded-xl border border-border/50 bg-background/80 p-3">
                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     <Filter className="mr-1 inline size-3 align-text-bottom" />
@@ -484,7 +544,31 @@ export default function AllTasksPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              )}
 
+              {lockFilter && (
+                <div className="space-y-1.5 rounded-xl border border-border/50 bg-background/80 p-3">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <Filter className="mr-1 inline size-3 align-text-bottom" />
+                    Status
+                  </span>
+                  <Select value={taskFeedFilter} onValueChange={setTaskFeedFilter}>
+                    <SelectTrigger className="h-10 bg-background">
+                      <SelectValue placeholder="Show…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="assigned_to_me">All my tasks</SelectItem>
+                      <SelectItem value="todo">To do</SelectItem>
+                      <SelectItem value="in_progress">In progress</SelectItem>
+                      <SelectItem value="submitted">Submitted</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {!lockFilter && (
                 <div className="space-y-2 rounded-xl border border-border/50 bg-background/80 p-3">
                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     <CalendarRange className="mr-1 inline size-3 align-text-bottom" />
@@ -579,6 +663,7 @@ export default function AllTasksPage() {
                     )}
                   </div>
                 </div>
+              )}
               </div>
             </div>
 
@@ -589,11 +674,13 @@ export default function AllTasksPage() {
                 <p className="py-20 text-center text-sm text-muted-foreground">No tasks in the program yet.</p>
               ) : filteredTaskFeed.length === 0 ? (
                 <p className="py-20 text-center text-sm text-muted-foreground">
-                  {dateFrom || dateTo
-                    ? 'No tasks in this date range — adjust From/To or clear dates.'
-                    : taskFeedFilter !== 'all'
-                      ? 'No tasks match this filter — try "All tasks".'
-                      : 'No tasks match this filter.'}
+                  {lockFilter
+                    ? 'No tasks assigned to you yet — check All tasks for open pool work.'
+                    : dateFrom || dateTo
+                      ? 'No tasks in this date range — adjust From/To or clear dates.'
+                      : taskFeedFilter !== 'all'
+                        ? 'No tasks match this filter — try "All tasks".'
+                        : 'No tasks match this filter.'}
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -605,8 +692,7 @@ export default function AllTasksPage() {
                 </div>
               )}
             </div>
-          </section>
-        </div>
+          </PageCard>
       </div>
 
       <Dialog
@@ -853,7 +939,7 @@ export default function AllTasksPage() {
                     {claimingId === vtId ? 'Claiming…' : 'Claim this task'}
                   </Button>
                 ) : userHasPendingAssignment(vt, currentUser.id) ? (
-                  <p className="text-sm font-medium text-primary">Awaiting admin approval for this request.</p>
+                  <p className="text-sm font-medium text-primary">Awaiting approval from admin or lead.</p>
                 ) : (
                   <Button
                     size="sm"
@@ -874,6 +960,10 @@ export default function AllTasksPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </DashboardPageShell>
   )
+}
+
+export default function AllTasksPage() {
+  return <AllTasksView />
 }

@@ -1,12 +1,28 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000/api'
 
-function getToken() {
-  if (typeof window === 'undefined') return null
-  return window.localStorage.getItem('token')
+import { clearAuthToken, getAuthToken, setAuthToken } from './auth-token'
+
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+function parseErrorMessage(text: string, status: number): string {
+  if (!text) return `Request failed with status ${status}`
+  try {
+    const parsed = JSON.parse(text) as { message?: string }
+    if (parsed?.message) return parsed.message
+  } catch {
+    /* plain text */
+  }
+  return text.length > 200 ? text.slice(0, 200) : text
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken()
+  const token = getAuthToken()
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
@@ -22,7 +38,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(text || `Request failed with status ${res.status}`)
+    const message = parseErrorMessage(text, res.status)
+    if (res.status === 401) {
+      clearAuthToken()
+    }
+    throw new ApiError(message, res.status)
   }
 
   return res.json()
@@ -30,7 +50,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
 
 /** Plain text / CSV (not JSON). Use for file downloads. */
 export async function apiFetchText(path: string, options: RequestInit = {}): Promise<string> {
-  const token = getToken()
+  const token = getAuthToken()
   const headers: HeadersInit = {
     ...(options.headers || {}),
   }
@@ -45,7 +65,11 @@ export async function apiFetchText(path: string, options: RequestInit = {}): Pro
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(text || `Request failed with status ${res.status}`)
+    const message = parseErrorMessage(text, res.status)
+    if (res.status === 401) {
+      clearAuthToken()
+    }
+    throw new ApiError(message, res.status)
   }
 
   return res.text()
@@ -82,7 +106,28 @@ export async function registerApi(name: string, email: string, password: string)
   })
 }
 
+export async function forgotPasswordApi(email: string) {
+  return apiFetch<{ message: string }>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function resetPasswordApi(token: string, password: string) {
+  return apiFetch<{ message: string }>('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  })
+}
+
 export async function meApi() {
   return apiFetch<AuthUser>('/auth/me')
 }
 
+export function saveAuthToken(token: string) {
+  setAuthToken(token)
+}
+
+export function removeAuthToken() {
+  clearAuthToken()
+}

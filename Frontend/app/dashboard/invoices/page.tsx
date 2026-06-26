@@ -24,6 +24,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { useApp } from '@/lib/app-context'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { toIsoLocalDate, parseLocalDateInput } from '@/lib/date-utils'
 
 const OSEN_ROLES = [
   { value: 'community_manager', label: 'Community Manager' },
@@ -751,11 +752,11 @@ export default function InvoicesPage() {
                         <PopoverContent className="w-auto p-0" align="start">
                           <Calendar
                             mode="single"
-                            selected={travelForm.eventDate ? new Date(travelForm.eventDate) : undefined}
+                            selected={parseLocalDateInput(travelForm.eventDate)}
                             onSelect={(d) =>
                               setTravelForm((f) => ({
                                 ...f,
-                                eventDate: d ? d.toISOString().slice(0, 10) : '',
+                                eventDate: d ? toIsoLocalDate(d) : '',
                               }))
                             }
                             initialFocus

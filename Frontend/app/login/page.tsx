@@ -5,7 +5,10 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { PasswordInput } from '@/components/password-input'
 import { useApp } from '@/lib/app-context'
+import { AuthLayout } from '@/components/auth-layout'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -22,54 +25,60 @@ export default function LoginPage() {
     try {
       await login(email, password)
       router.push('/dashboard')
-    } catch (err: any) {
-      setError(err.message || 'Failed to login')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to login')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background grid-bg px-4">
-      <div className="w-full max-w-md glass rounded-2xl border border-border/60 p-8 space-y-6">
-        <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold">Welcome back</h1>
-          <p className="text-sm text-muted-foreground">Sign in to access your dashboard.</p>
+    <AuthLayout title="Welcome back" subtitle="Sign in to your contributor dashboard">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            className="h-11 bg-background/80"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Email</label>
-            <Input
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="password">Password</Label>
+            <Link href="/forgot-password" className="text-xs font-medium text-primary hover:underline">
+              Forgot password?
+            </Link>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Password</label>
-            <Input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign in'}
-          </Button>
-        </form>
-        <p className="text-xs text-muted-foreground text-center">
-          Don&apos;t have an account?{' '}
-          <Link href="/register" className="text-primary hover:underline">
-            Sign up
-          </Link>
-        </p>
-      </div>
-    </div>
+          <PasswordInput
+            id="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+        {error && (
+          <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        <Button type="submit" className="h-11 w-full text-base font-semibold shadow-lg shadow-primary/20" disabled={loading}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </Button>
+      </form>
+
+      <p className="mt-4 text-center text-sm text-muted-foreground">
+        Don&apos;t have an account?{' '}
+        <Link href="/register" className="font-medium text-primary hover:underline">
+          Create one
+        </Link>
+      </p>
+    </AuthLayout>
   )
 }
-

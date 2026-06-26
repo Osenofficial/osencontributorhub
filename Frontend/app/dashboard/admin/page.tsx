@@ -19,6 +19,7 @@ import {
   Megaphone,
 } from 'lucide-react'
 import { DashboardTopbar } from '@/components/dashboard-topbar'
+import { DashboardPageShell, PageCard } from '@/components/dashboard-page-shell'
 import { StatusBadge } from '@/components/status-badge'
 import { AvatarCircle } from '@/components/avatar-circle'
 import { Button } from '@/components/ui/button'
@@ -66,16 +67,16 @@ import { apiFetch } from '@/lib/api'
 import { CONTRIBUTION_TYPES, findContributionItemById } from '@/lib/contribution-types'
 import { type ContributorPeriodRow, type ContributorPeriodsResponse } from '@/lib/contributor-cycle'
 import { cn } from '@/lib/utils'
+import { DateTimeField, defaultDateTimeLocal } from '@/components/datetime-field'
+import { TaskFormField, TaskFormSection } from '@/components/task-form-shell'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AdminAnnouncementsPanel } from '@/components/admin-announcements-panel'
 
 /** End of today (local) for new tasks — only used when creating a task. */
 function defaultDeadlineTodayEnd(): string {
   const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}T23:59`
+  d.setHours(23, 59, 0, 0)
+  return defaultDateTimeLocal().slice(0, 10) + 'T23:59'
 }
 
 type FormState = {
@@ -219,7 +220,12 @@ function isLeadSelfAssignOnly(
   )
 }
 
-/** Admins edit directly. Leads only for self-assign on an open pool task (see isLeadSelfAssignOnly). */
+/** Admins act on any task. Leads on tasks they created, or self-assign on open pool. */
+function taskCreatedByUser(task: any, userId: string) {
+  const cid = task?.createdBy?._id ?? task?.createdBy
+  return cid != null && String(cid) === String(userId)
+}
+
 function canActDirectOnTask(
   task: any | undefined,
   user: { id: string; role: string } | null | undefined,
@@ -227,7 +233,10 @@ function canActDirectOnTask(
 ) {
   if (!user || !task) return false
   if (user.role === 'admin') return true
-  if (user.role === 'lead' && form && isLeadSelfAssignOnly(task, form, user)) return true
+  if (user.role === 'lead') {
+    if (taskCreatedByUser(task, user.id)) return true
+    if (form && isLeadSelfAssignOnly(task, form, user)) return true
+  }
   return false
 }
 
@@ -357,6 +366,7 @@ export default function AdminPage() {
   const [leadResolveAlert, setLeadResolveAlert] = useState<{ req: any; action: 'approve' | 'decline' } | null>(null)
   const [leadResolveNote, setLeadResolveNote] = useState('')
   const [leadResolveSubmitting, setLeadResolveSubmitting] = useState(false)
+  const [taskCreating, setTaskCreating] = useState(false)
 
   function formatDate(value: string | Date | undefined) {
     if (!value) return '—'
@@ -476,6 +486,7 @@ export default function AdminPage() {
   const activeContributorCycle = contributorPeriods.find((p) => p.isActive)
 
   const canManageUsers = currentUser.role === 'admin'
+  const canApproveAssignments = currentUser.role === 'admin' || currentUser.role === 'lead'
 
   async function handleStartNextContributorCycle() {
     if (!currentUser || currentUser.role !== 'admin') return
@@ -511,7 +522,9 @@ export default function AdminPage() {
   }
 
   function handleCreate() {
+    if (taskCreating) return
     if (!form.title || !form.deadline || !form.contributionType) return
+    setTaskCreating(true)
     const assignPayload =
       form.assignedTo && form.assignedTo !== '__pool__' ? form.assignedTo : null
     const payload = {
@@ -528,12 +541,14 @@ export default function AdminPage() {
       method: 'POST',
       body: JSON.stringify(payload),
     })
-      .then((task) => {
-        setTasks((prev) => [task, ...prev])
+      .then(() => apiFetch<Task[]>('/admin/tasks'))
+      .then((list) => {
+        setTasks(list)
         setForm(DEFAULT_FORM)
         setTaskForm(null)
       })
       .catch(() => {})
+      .finally(() => setTaskCreating(false))
   }
 
   function findTaskById(taskId: string) {
@@ -669,11 +684,15 @@ export default function AdminPage() {
 
   function handleDelete(taskId: string) {
     if (!currentUser) return
-    if (currentUser.role === 'admin') {
+    const task = findTaskById(taskId)
+    if (currentUser.role === 'admin' || (currentUser.role === 'lead' && task && taskCreatedByUser(task, currentUser.id))) {
       apiFetch(`/admin/tasks/${taskId}`, {
         method: 'DELETE',
-      }).catch(() => {})
-      setTasks((prev) => prev.filter((task) => ((task as any)._id ?? task.id) !== taskId))
+      })
+        .then(() => {
+          setTasks((prev) => prev.filter((t) => ((t as any)._id ?? t.id) !== taskId))
+        })
+        .catch(() => {})
     } else if (currentUser.role === 'lead') {
       setLeadActionSubmitPending({ type: 'delete_task', taskId })
       setLeadReasonText('')
@@ -684,7 +703,7 @@ export default function AdminPage() {
   }
 
   function handleApproveAssignment(taskId: string, userId: string) {
-    if (currentUser?.role !== 'admin') return
+    if (currentUser?.role !== 'admin' && currentUser?.role !== 'lead') return
     apiFetch(`/admin/tasks/${taskId}/approve-assignment`, {
       method: 'POST',
       body: JSON.stringify({ userId }),
@@ -697,7 +716,7 @@ export default function AdminPage() {
   }
 
   function handleRejectAssignment(taskId: string, userId: string) {
-    if (currentUser?.role !== 'admin') return
+    if (currentUser?.role !== 'admin' && currentUser?.role !== 'lead') return
     apiFetch(`/admin/tasks/${taskId}/reject-assignment`, {
       method: 'POST',
       body: JSON.stringify({ userId }),
@@ -760,23 +779,36 @@ export default function AdminPage() {
     [tasks],
   )
 
-  /** Accounts & evangelist are not eligible for task assignment (dropdown + API). */
+  /** Accounts & evangelist + non-active users are not eligible for task assignment. */
   const ROLES_EXCLUDED_FROM_ASSIGN = useMemo(() => new Set(['accounts', 'evangelist']), [])
   const membersForAssignDropdown = useMemo(() => {
-    const assignable = members.filter((m) => !ROLES_EXCLUDED_FROM_ASSIGN.has(m.role))
+    const assignable = members.filter(
+      (m) =>
+        !ROLES_EXCLUDED_FROM_ASSIGN.has(m.role) &&
+        m.status === 'active' &&
+        m.isActive !== false,
+    )
     if (taskForm?.mode !== 'edit' || !form.assignedTo || form.assignedTo === '__pool__') {
       return assignable
     }
     const cur = members.find((m) => String(m._id) === form.assignedTo)
     if (
       cur &&
-      ROLES_EXCLUDED_FROM_ASSIGN.has(cur.role) &&
+      (ROLES_EXCLUDED_FROM_ASSIGN.has(cur.role) ||
+        cur.status !== 'active' ||
+        cur.isActive === false) &&
       !assignable.some((m) => String(m._id) === form.assignedTo)
     ) {
       return [cur, ...assignable]
     }
     return assignable
   }, [members, taskForm, form.assignedTo, ROLES_EXCLUDED_FROM_ASSIGN])
+
+  function memberWorkloadLabel(m: { pendingTaskCount?: number; activeTaskCount?: number }) {
+    const count = m.pendingTaskCount ?? m.activeTaskCount ?? 0
+    if (count === 0) return 'Free'
+    return `${count} assigned`
+  }
 
   const panelTitle = currentUser.role === 'admin' ? 'Admin Panel' : 'Program'
 
@@ -826,10 +858,12 @@ export default function AdminPage() {
               size="icon"
               variant="ghost"
               className="size-7 text-primary hover:bg-primary/10"
-              title={
+            title={
                 canActDirectOnTask(task, currentUser!)
                   ? 'Edit task'
-                  : 'Request edit (sent to admin for approval)'
+                  : currentUser!.role === 'lead'
+                    ? 'Request edit (admin approval for tasks you did not create)'
+                    : 'Request edit (sent to admin for approval)'
               }
               onClick={() => {
                 setForm(taskToFormState(task))
@@ -843,7 +877,11 @@ export default function AdminPage() {
             size="icon"
             variant="ghost"
             className="size-7 text-destructive hover:bg-destructive/10"
-            title={currentUser!.role === 'lead' ? 'Request delete (admin must approve)' : 'Delete task'}
+            title={
+              currentUser!.role === 'lead' && !taskCreatedByUser(task, currentUser!.id)
+                ? 'Request delete (admin must approve)'
+                : 'Delete task'
+            }
             onClick={() =>
               setConfirm({
                 kind: 'delete_task',
@@ -918,10 +956,12 @@ export default function AdminPage() {
     <div className="flex flex-col min-h-full">
       <DashboardTopbar title={panelTitle} />
 
-      <div className="flex-1 p-6 space-y-6">
+      <div className="relative flex-1">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-primary/[0.06] to-transparent" />
+        <div className="page-container relative max-w-6xl space-y-6 pb-10">
         {/* Overview cards */}
         <div className="grid gap-4 sm:grid-cols-3">
-          <div className="glass rounded-xl border p-4 flex items-center gap-3">
+          <div className="surface-card p-4 flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 border border-primary/30">
               <Users className="size-4 text-primary" />
             </div>
@@ -930,7 +970,7 @@ export default function AdminPage() {
               <div className="text-lg font-semibold">{stats?.totalUsers ?? '--'}</div>
             </div>
           </div>
-          <div className="glass rounded-xl border p-4 flex items-center gap-3">
+          <div className="surface-card p-4 flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-lg bg-accent/10 border border-accent/30">
               <ListChecks className="size-4 text-accent" />
             </div>
@@ -939,7 +979,7 @@ export default function AdminPage() {
               <div className="text-lg font-semibold">{stats?.totalTasks ?? tasks.length}</div>
             </div>
           </div>
-          <div className="glass rounded-xl border p-4 flex items-center gap-3">
+          <div className="surface-card p-4 flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-lg bg-green-500/10 border border-green-500/30">
               <CheckCircle2 className="size-4 text-green-400" />
             </div>
@@ -951,7 +991,7 @@ export default function AdminPage() {
         </div>
 
         {currentUser.role === 'admin' && (
-          <div className="glass rounded-xl border border-primary/25 bg-primary/[0.06] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="surface-card border-primary/25 bg-primary/[0.06] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-3 min-w-0">
               <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/15 border border-primary/25">
                 <CalendarRange className="size-5 text-primary" />
@@ -1049,16 +1089,16 @@ export default function AdminPage() {
         </div>
 
         {view === 'tasks' && pendingAssignmentTasks.length > 0 && (
-          <div className="glass rounded-2xl border border-primary/25 bg-primary/[0.04] p-5">
+          <div className="surface-card border-primary/25 bg-primary/[0.04] p-5">
             <h3 className="mb-4 flex items-center gap-2 font-semibold text-primary">
               <UserPlus className="size-4" /> Assignment requests ({pendingAssignmentTasks.length} tasks)
             </h3>
             <p className="mb-4 text-xs text-muted-foreground">
               Contributors (and leads) asked to work on these open pool tasks.{' '}
-              {canManageUsers ? (
+              {canApproveAssignments ? (
                 <>Approve to assign them, or decline to remove the request.</>
               ) : (
-                <span className="font-medium text-foreground">Only an admin can approve or decline — contact an admin.</span>
+                <span className="font-medium text-foreground">Only admins and leads can approve or decline.</span>
               )}
             </p>
             <div className="space-y-4">
@@ -1095,7 +1135,7 @@ export default function AdminPage() {
                             </span>
                           </div>
                           <div className="flex shrink-0 gap-2">
-                            {canManageUsers ? (
+                            {canApproveAssignments ? (
                               <>
                                 <Button
                                   size="sm"
@@ -1144,7 +1184,7 @@ export default function AdminPage() {
         )}
 
         {view === 'tasks' && canManageUsers && leadActionRequests.length > 0 && (
-          <div className="glass rounded-2xl border border-orange-400/30 bg-orange-400/[0.06] p-5">
+          <div className="surface-card border-orange-400/30 bg-orange-400/[0.06] p-5">
             <h3 className="mb-2 flex items-center gap-2 font-semibold text-orange-400">
               <Shield className="size-4" /> Lead requests — needs your approval ({leadActionRequests.length})
             </h3>
@@ -1540,7 +1580,7 @@ export default function AdminPage() {
             </TabsList>
 
             <TabsContent value="all" className="mt-0">
-              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border">
+              <div className="surface-card flex max-h-[min(70vh,44rem)] flex-col overflow-hidden">
                 <div className="shrink-0 border-b border-border/50 px-5 py-3">
                   <h3 className="font-semibold">All tasks</h3>
                   <p className="text-[11px] text-muted-foreground">Every task in the program.</p>
@@ -1556,7 +1596,7 @@ export default function AdminPage() {
             </TabsContent>
 
             <TabsContent value="pending" className="mt-0">
-              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border border-yellow-500/25 bg-yellow-500/[0.03]">
+              <div className="surface-card flex max-h-[min(70vh,44rem)] flex-col overflow-hidden border-yellow-500/25 bg-yellow-500/[0.03]">
                 <div className="shrink-0 border-b border-border/50 px-5 py-3">
                   <h3 className="flex items-center gap-2 font-semibold text-yellow-600 dark:text-yellow-400">
                     <Eye className="size-4" /> Pending review
@@ -1580,7 +1620,7 @@ export default function AdminPage() {
             </TabsContent>
 
             <TabsContent value="completed" className="mt-0">
-              <div className="glass flex max-h-[min(70vh,44rem)] flex-col overflow-hidden rounded-2xl border">
+              <div className="surface-card flex max-h-[min(70vh,44rem)] flex-col overflow-hidden">
                 <div className="shrink-0 border-b border-border/50 px-5 py-3">
                   <h3 className="font-semibold">Completed</h3>
                   <p className="text-[11px] text-muted-foreground">Approved and finished work.</p>
@@ -1598,7 +1638,7 @@ export default function AdminPage() {
         ) : view === 'announcements' ? (
           <AdminAnnouncementsPanel />
         ) : (
-          <div className="glass rounded-2xl border overflow-hidden">
+          <div className="surface-card overflow-hidden">
             <div className="px-5 py-4 border-b border-border/50 flex items-center justify-between">
               <h3 className="font-semibold">User Management</h3>
               <p className="text-xs text-muted-foreground">{members.length} members</p>
@@ -1722,6 +1762,7 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* Create / Edit Task Dialog */}
@@ -1860,7 +1901,7 @@ export default function AdminPage() {
                 <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">3</span>
                 <h3 className="text-sm font-semibold text-foreground">Settings & assignee</h3>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-8">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pl-8">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Category</label>
                   <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v as TaskCategory }))}>
@@ -1908,87 +1949,71 @@ export default function AdminPage() {
                     Points (capped at 100).
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Deadline & time <span className="text-destructive">*</span></label>
-                  {(taskForm?.mode === 'create' || !form.deadline) && (
-                    <p className="text-[11px] text-muted-foreground">
-                      {taskForm?.mode === 'create'
-                        ? 'Defaults to today — change if needed.'
-                        : 'This task has no deadline yet (e.g. self-submitted). Pick a date, then set the time.'}
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className="h-10 flex-1 justify-start text-left font-normal border-border">
-                          <CalendarIcon className="mr-2 size-4" />
-                          {form.deadline
-                            ? new Date(form.deadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-                            : 'Pick date'}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-card border-border" align="start">
-                        <Calendar
-                          mode="single"
-                          selected={form.deadline ? new Date(form.deadline) : undefined}
-                          onSelect={(d) => {
-                            const datePart = d ? d.toISOString().slice(0, 10) : ''
-                            const timePart = form.deadline?.includes('T') ? form.deadline.slice(11, 16) : '23:59'
-                            setForm((f) => ({ ...f, deadline: datePart ? `${datePart}T${timePart}` : '' }))
-                          }}
-                          disabled={
-                            taskForm?.mode === 'create'
-                              ? (date) => date < new Date(new Date().setHours(0, 0, 0, 0))
-                              : undefined
-                          }
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    <Input
-                      type="time"
-                      disabled={!form.deadline?.slice(0, 10)}
-                      title={!form.deadline?.slice(0, 10) ? 'Choose a date first' : undefined}
-                      value={form.deadline?.includes('T') ? form.deadline.slice(11, 16) : ''}
-                      onChange={(e) => {
-                        const datePart = form.deadline?.slice(0, 10)
-                        if (!datePart) return
-                        setForm((f) => ({ ...f, deadline: `${datePart}T${e.target.value}` }))
-                      }}
-                      className="h-10 w-28 bg-background border-border disabled:opacity-50"
-                    />
-                  </div>
-                </div>
+              </div>
+              <div className="space-y-2 pl-8">
+                <DateTimeField
+                  label="Deadline"
+                  required
+                  value={form.deadline}
+                  onChange={(deadline) => setForm((f) => ({ ...f, deadline }))}
+                  hint={
+                    taskForm?.mode === 'create'
+                      ? 'Defaults to today 11:59 PM. Assignee gets email 1 hour before deadline; late completion costs 30% points.'
+                      : 'Pick date and time for the deadline.'
+                  }
+                  minDate={taskForm?.mode === 'create' ? new Date(new Date().setHours(0, 0, 0, 0)) : undefined}
+                />
               </div>
               <div className="pl-8 space-y-2">
                 <label className="text-sm font-medium text-foreground">Assign to</label>
-                <p className="text-xs text-muted-foreground">
-                  Leave as open pool so contributors can request assignment (an admin approves), or pick a member.
-                  Accounts and evangelist roles are not listed — they are not assigned program tasks.
-                  {currentUser.role === 'lead'
-                    ? ' As a lead, you can assign an open pool task to yourself without admin approval.'
-                    : ''}
-                </p>
+                
+                {membersForAssignDropdown.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 rounded-lg border border-border/50 bg-muted/20 p-2">
+                    
+                    {membersForAssignDropdown.filter((m) => (m.pendingTaskCount ?? m.activeTaskCount ?? 0) > 0).length > 0 && (
+                      <span className="text-[10px] text-muted-foreground px-1">
+                        Busy:{' '}
+                        {membersForAssignDropdown
+                          .filter((m) => (m.pendingTaskCount ?? m.activeTaskCount ?? 0) > 0)
+                          .slice(0, 4)
+                          .map((m) => `${m.name} (${m.pendingTaskCount ?? m.activeTaskCount})`)
+                          .join(', ')}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <Select value={form.assignedTo} onValueChange={(v) => setForm((f) => ({ ...f, assignedTo: v }))}>
-                  <SelectTrigger className="h-10 bg-background border-border">
+                  <SelectTrigger className="h-11 bg-background border-border">
                     <SelectValue placeholder="Open pool or member..." />
                   </SelectTrigger>
-                  <SelectContent className="bg-card border-border">
-                    <SelectItem value="__pool__" className="py-2">
+                  <SelectContent className="bg-card border-border max-h-72">
+                    <SelectItem value="__pool__" className="py-2.5">
                       <span className="text-amber-600 dark:text-amber-400">Open pool (unassigned)</span>
                     </SelectItem>
-                    {membersForAssignDropdown.map((m) => (
-                      <SelectItem key={m._id} value={m._id} className="py-2">
-                        <div className="flex items-center gap-2">
-                          <AvatarCircle
-                            initials={m.name?.slice(0, 2) || '?'}
-                            src={typeof m.avatar === 'string' && m.avatar.startsWith('http') ? m.avatar : undefined}
-                            size="sm"
-                          />
-                          <span>{m.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
+                    {membersForAssignDropdown.map((m) => {
+                      const count = m.pendingTaskCount ?? m.activeTaskCount ?? 0
+                      const isFree = count === 0
+                      return (
+                        <SelectItem key={m._id} value={String(m._id)} className="py-2.5">
+                          <div className="flex w-full items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <AvatarCircle initials={m.name?.slice(0, 2) || '?'} size="sm" />
+                              <span className="truncate">{m.name}</span>
+                            </div>
+                            <span
+                              className={cn(
+                                'shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold',
+                                isFree
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-muted text-muted-foreground',
+                              )}
+                            >
+                              {memberWorkloadLabel(m)}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -2029,9 +2054,9 @@ export default function AdminPage() {
                 <Button
                   onClick={handleCreate}
                   className="bg-primary text-primary-foreground gap-1.5 shadow-lg shadow-primary/25"
-                  disabled={!form.title || !form.deadline || !form.contributionType}
+                  disabled={!form.title || !form.deadline || !form.contributionType || taskCreating}
                 >
-                  <Plus className="size-4" /> Create Task
+                  <Plus className="size-4" /> {taskCreating ? 'Creating…' : 'Create Task'}
                 </Button>
               )}
             </div>

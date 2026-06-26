@@ -1,8 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { Send, Github, FileText, Link as LinkIcon, CheckCircle2, Sparkles } from 'lucide-react'
-import { DashboardTopbar } from '@/components/dashboard-topbar'
+import Link from 'next/link'
+import { Send, Github, FileText, Link as LinkIcon, CheckCircle2 } from 'lucide-react'
+import { DashboardPageShell, PageCard } from '@/components/dashboard-page-shell'
+import { DateTimeField, defaultDateTimeLocal } from '@/components/datetime-field'
+import { TaskFormField, TaskFormSection } from '@/components/task-form-shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -26,6 +29,7 @@ export default function SubmitTaskPage() {
     contributionType: '',
     category: 'community' as TaskCategory,
     points: '10',
+    completedDate: defaultDateTimeLocal(),
     githubLink: '',
     notionLink: '',
     googleDoc: '',
@@ -44,7 +48,7 @@ export default function SubmitTaskPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.title || !form.contributionType) return
+    if (!form.title || !form.contributionType || !form.completedDate) return
     setLoading(true)
     try {
       await apiFetch('/dashboard/contribute', {
@@ -59,6 +63,7 @@ export default function SubmitTaskPage() {
           notionLink: form.notionLink || undefined,
           googleDoc: form.googleDoc || undefined,
           comments: form.comments || undefined,
+          completedDate: form.completedDate,
         }),
       })
       setSubmitted(true)
@@ -68,13 +73,14 @@ export default function SubmitTaskPage() {
         contributionType: '',
         category: 'community',
         points: '10',
+        completedDate: defaultDateTimeLocal(),
         githubLink: '',
         notionLink: '',
         googleDoc: '',
         comments: '',
       })
     } catch {
-      setLoading(false)
+      /* keep form */
     } finally {
       setLoading(false)
     }
@@ -82,180 +88,158 @@ export default function SubmitTaskPage() {
 
   if (submitted) {
     return (
-      <div className="flex flex-col min-h-full">
-        <DashboardTopbar title="Submit Task" />
-        <div className="flex-1 p-6 flex items-center justify-center">
-          <div className="max-w-md w-full glass rounded-2xl border border-green-400/20 bg-green-400/5 p-8 text-center space-y-4">
-            <div className="flex size-16 items-center justify-center rounded-full bg-green-400/20 border border-green-400/30 mx-auto">
-              <CheckCircle2 className="size-8 text-green-400" />
-            </div>
-            <h2 className="text-xl font-bold">Submitted successfully!</h2>
-            <p className="text-sm text-muted-foreground">
-              Your contribution has been submitted for review. An admin or lead will review it and approve it soon.
-            </p>
-            <Button
-              variant="outline"
-              onClick={() => setSubmitted(false)}
-              className="border-green-400/30 text-green-400 hover:bg-green-400/10"
-            >
-              Submit another
-            </Button>
+      <DashboardPageShell title="Submit task" width="sm">
+        <PageCard className="mx-auto max-w-md border-emerald-500/25 bg-emerald-500/[0.04] p-10 text-center">
+          <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/15">
+            <CheckCircle2 className="size-8 text-emerald-400" />
           </div>
-        </div>
-      </div>
+          <h2 className="text-xl font-bold">Submitted successfully</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Your work is in review. You&apos;ll get a notification when an admin or lead approves it.
+          </p>
+          <Button asChild variant="outline" className="mt-6 border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10">
+            <Link href="/dashboard/my-tasks">View my tasks</Link>
+          </Button>
+          <Button variant="ghost" onClick={() => setSubmitted(false)} className="mt-3 text-muted-foreground">
+            Submit another
+          </Button>
+        </PageCard>
+      </DashboardPageShell>
     )
   }
 
   return (
-    <div className="flex flex-col min-h-full">
-      <DashboardTopbar title="Submit Task" />
-
-      <div className="flex-1 p-6 max-w-2xl mx-auto w-full">
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-1">
-            <Sparkles className="size-5 text-primary" />
-            <h2 className="text-lg font-bold">Submit your completed work</h2>
+    <DashboardPageShell
+      title="Submit task"
+      description="Completed something on your own? Submit it here for review and points."
+      width="sm"
+    >
+      <form onSubmit={handleSubmit}>
+        <PageCard className="divide-y divide-border/50 p-0">
+          <div className="space-y-5 p-6">
+            <TaskFormSection step={1} title="What did you complete?" description="Give reviewers a clear title and summary.">
+              <div className="space-y-4">
+                <TaskFormField label="Title" required>
+                  <Input
+                    placeholder="e.g. Edited reel for OSEN launch event"
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    className="h-11 bg-background/80"
+                    required
+                  />
+                </TaskFormField>
+                <TaskFormField label="Description">
+                  <Textarea
+                    placeholder="Brief description of what you did…"
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    className="min-h-24 resize-none bg-background/80"
+                  />
+                </TaskFormField>
+                <DateTimeField
+                  label="Date & time completed"
+                  required
+                  value={form.completedDate}
+                  onChange={(completedDate) => setForm((f) => ({ ...f, completedDate }))}
+                  hint="When you finished this work — past or future dates are allowed."
+                />
+              </div>
+            </TaskFormSection>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Did you complete a contribution on your own (not assigned)? Submit it here for review. Points and payout follow the OSEN rewards policy.
-          </p>
-        </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="glass rounded-2xl border p-6 space-y-4">
-            <h3 className="font-semibold text-sm">What did you complete?</h3>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Title <span className="text-destructive">*</span></label>
-              <Input
-                placeholder="e.g. Edited reel for OSEN launch event"
-                value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                className="bg-background border-border"
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Description</label>
-              <Textarea
-                placeholder="Brief description of what you did..."
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                className="bg-background border-border min-h-20 resize-none"
-              />
-            </div>
-          </div>
-
-          <div className="glass rounded-2xl border p-6 space-y-4">
-            <h3 className="font-semibold text-sm">Contribution type & points</h3>
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-6">
-              <div className="min-w-0 flex-1 space-y-2">
-                <label className="text-sm font-medium">Contribution type <span className="text-destructive">*</span></label>
-                <Select value={form.contributionType} onValueChange={handleContributionTypeChange}>
-                  <SelectTrigger className="h-auto min-h-10 w-full min-w-0 bg-background border-border py-2.5 whitespace-normal !w-full items-start [&_[data-slot=select-value]]:whitespace-normal [&_[data-slot=select-value]]:text-left [&_[data-slot=select-value]]:items-start">
-                    <SelectValue placeholder="Choose a type..." />
-                  </SelectTrigger>
-                  <SelectContent className="bg-card border-border max-h-72">
-                    {CONTRIBUTION_TYPES.map((group) => (
-                      <div key={group.group}>
-                        <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                          {group.group}
-                        </div>
-                        {group.items.map((item) => (
-                          <SelectItem key={item.id} value={item.id} className="py-2">
-                            <div className="flex items-center justify-between gap-2">
+          <div className="space-y-5 bg-muted/10 p-6">
+            <TaskFormSection step={2} title="Contribution type & points" description="Points auto-fill from the policy.">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+                <TaskFormField label="Type" required className="min-w-0 flex-1">
+                  <Select value={form.contributionType} onValueChange={handleContributionTypeChange}>
+                    <SelectTrigger className="min-h-11 w-full bg-background/80">
+                      <SelectValue placeholder="Choose a type…" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72 border-border/60 bg-popover">
+                      {CONTRIBUTION_TYPES.map((group) => (
+                        <div key={group.group}>
+                          <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {group.group}
+                          </div>
+                          {group.items.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
                               <span className="text-sm">{item.label}</span>
-                              <span className="text-xs text-primary font-medium">{item.points} pts</span>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </div>
-                    ))}
-                  </SelectContent>
-                </Select>
+                              <span className="ml-2 text-xs text-primary">{item.points} pts</span>
+                            </SelectItem>
+                          ))}
+                        </div>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </TaskFormField>
+                <TaskFormField label="Points" hint={`Cap ${MONTHLY_POINT_CAP}+ pts = ₹${MAX_PAYOUT_INR}`} className="w-full lg:w-36">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={form.points}
+                    onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
+                    className="h-11 bg-background/80"
+                  />
+                </TaskFormField>
               </div>
-              <div className="w-full shrink-0 space-y-2 lg:w-36">
-                <label className="text-sm font-medium">Points</label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={form.points}
-                  onChange={(e) => setForm((f) => ({ ...f, points: e.target.value }))}
-                  className="w-full bg-background border-border"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Payout by monthly points tier (min 10 pts) · Cap {MONTHLY_POINT_CAP}+ pts = ₹{MAX_PAYOUT_INR}
-                </p>
-              </div>
-            </div>
+            </TaskFormSection>
           </div>
 
-          <div className="glass rounded-2xl border p-6 space-y-4">
-            <h3 className="font-semibold text-sm">Proof / Links</h3>
-            <p className="text-xs text-muted-foreground">Add links to your work (GitHub, Notion, Google Doc, etc.) so reviewers can verify.</p>
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                  <Github className="size-3" /> GitHub
-                </label>
-                <Input
-                  placeholder="https://github.com/..."
-                  value={form.githubLink}
-                  onChange={(e) => setForm((f) => ({ ...f, githubLink: e.target.value }))}
-                  className="bg-background border-border"
-                />
+          <div className="space-y-5 p-6">
+            <TaskFormSection step={3} title="Proof & links" description="Add links so reviewers can verify your work.">
+              <div className="space-y-4">
+                <TaskFormField label="GitHub">
+                  <Input
+                    placeholder="https://github.com/…"
+                    value={form.githubLink}
+                    onChange={(e) => setForm((f) => ({ ...f, githubLink: e.target.value }))}
+                    className="h-11 bg-background/80"
+                  />
+                </TaskFormField>
+                <TaskFormField label="Notion">
+                  <Input
+                    placeholder="https://notion.so/…"
+                    value={form.notionLink}
+                    onChange={(e) => setForm((f) => ({ ...f, notionLink: e.target.value }))}
+                    className="h-11 bg-background/80"
+                  />
+                </TaskFormField>
+                <TaskFormField label="Google Doc">
+                  <Input
+                    placeholder="https://docs.google.com/…"
+                    value={form.googleDoc}
+                    onChange={(e) => setForm((f) => ({ ...f, googleDoc: e.target.value }))}
+                    className="h-11 bg-background/80"
+                  />
+                </TaskFormField>
+                <TaskFormField label="Notes for reviewer">
+                  <Textarea
+                    placeholder="Anything else we should know…"
+                    value={form.comments}
+                    onChange={(e) => setForm((f) => ({ ...f, comments: e.target.value }))}
+                    className="min-h-20 resize-none bg-background/80"
+                  />
+                </TaskFormField>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                  <LinkIcon className="size-3" /> Notion
-                </label>
-                <Input
-                  placeholder="https://notion.so/..."
-                  value={form.notionLink}
-                  onChange={(e) => setForm((f) => ({ ...f, notionLink: e.target.value }))}
-                  className="bg-background border-border"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                  <FileText className="size-3" /> Google Doc
-                </label>
-                <Input
-                  placeholder="https://docs.google.com/..."
-                  value={form.googleDoc}
-                  onChange={(e) => setForm((f) => ({ ...f, googleDoc: e.target.value }))}
-                  className="bg-background border-border"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">Comments</label>
-                <Textarea
-                  placeholder="Any additional notes for the reviewer..."
-                  value={form.comments}
-                  onChange={(e) => setForm((f) => ({ ...f, comments: e.target.value }))}
-                  className="bg-background border-border min-h-16 resize-none"
-                />
-              </div>
-            </div>
+            </TaskFormSection>
           </div>
 
-          <div className="flex gap-3">
+          <div className="border-t border-border/50 bg-muted/20 p-6">
             <Button
               type="submit"
-              disabled={!form.title || !form.contributionType || loading}
-              className="flex-1 bg-primary text-primary-foreground gap-2"
+              disabled={!form.title || !form.contributionType || !form.completedDate || loading}
+              className="h-12 w-full gap-2 text-base font-semibold shadow-lg shadow-primary/15"
             >
-              {loading ? (
-                <span className="animate-pulse">Submitting...</span>
-              ) : (
+              {loading ? 'Submitting…' : (
                 <>
                   <Send className="size-4" /> Submit for review
                 </>
               )}
             </Button>
           </div>
-        </form>
-      </div>
-    </div>
+        </PageCard>
+      </form>
+    </DashboardPageShell>
   )
 }

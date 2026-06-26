@@ -160,7 +160,7 @@ export function AdminAnnouncementsPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="glass rounded-2xl border border-violet-500/25 bg-violet-500/[0.04] p-5 sm:p-6">
+      <div className="surface-card border-violet-500/20 bg-violet-500/[0.04] p-5 sm:p-6">
         <div className="mb-5 flex items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-violet-500/30 bg-violet-500/15">
             <Megaphone className="size-5 text-violet-400" />
@@ -320,7 +320,7 @@ export function AdminAnnouncementsPanel() {
         </div>
       </div>
 
-      <div className="glass overflow-hidden rounded-2xl border">
+      <div className="surface-card overflow-hidden">
         <div className="flex items-center gap-2 border-b border-border/50 px-5 py-4">
           <History className="size-4 text-muted-foreground" />
           <h3 className="font-semibold">Recent announcements</h3>

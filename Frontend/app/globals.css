@@ -113,6 +113,28 @@
   border: 1px solid var(--glass-border);
 }
 
+/* Unified page surfaces */
+.surface-card {
+  @apply rounded-2xl border border-border/60 bg-card/50 shadow-sm backdrop-blur-md;
+}
+
+.page-container {
+  @apply mx-auto w-full space-y-6 px-4 py-6 pb-10 sm:px-6 lg:px-8;
+}
+
+.page-section-title {
+  @apply text-base font-semibold tracking-tight text-foreground;
+}
+
+.page-section-desc {
+  @apply text-sm text-muted-foreground;
+}
+
+/* Nav active indicator */
+.nav-active-indicator {
+  @apply absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary shadow-[0_0_12px_oklch(0.65_0.28_280_/_0.6)];
+}
+
 /* Neon glow utilities */
 .neon-glow-purple {
   box-shadow: 0 0 20px oklch(0.65 0.28 280 / 0.4), 0 0 60px oklch(0.65 0.28 280 / 0.15);
