@@ -16,7 +16,17 @@ import {
 import { DashboardTopbar } from '@/components/dashboard-topbar'
 import { InvoiceHubNav } from '@/components/invoice-hub-nav'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -266,7 +276,7 @@ export default function InvoiceTrackingPage() {
   const [invoiceComments, setInvoiceComments] = useState<InvoiceComment[]>([])
   const [newCommentBody, setNewCommentBody] = useState('')
   const [savingComment, setSavingComment] = useState(false)
-  const [decision, setDecision] = useState<'approved' | 'rejected' | 'paid' | null>(null)
+  const [decisionConfirm, setDecisionConfirm] = useState<'approved' | 'rejected' | 'paid' | null>(null)
   const [reviewNotes, setReviewNotes] = useState('')
   const [savingDecision, setSavingDecision] = useState(false)
 
@@ -367,7 +377,7 @@ export default function InvoiceTrackingPage() {
     setCommentsError(null)
     setInvoiceComments([])
     setNewCommentBody('')
-    setDecision(null)
+    setDecisionConfirm(null)
     setReviewNotes('')
   }
 
@@ -381,7 +391,7 @@ export default function InvoiceTrackingPage() {
     setDetailPayout(null)
     setInvoiceComments([])
     setNewCommentBody('')
-    setDecision(null)
+    setDecisionConfirm(null)
     setReviewNotes('')
     try {
       if (kind === 'travel') {
@@ -476,18 +486,19 @@ export default function InvoiceTrackingPage() {
   }
 
   async function confirmDecision() {
-    if (!decision || !role) return
+    const action = decisionConfirm
+    if (!action || !role) return
     if (detailKind === 'travel' && detailInvoice) {
       if (role === 'admin') {
-        if (!['approved', 'rejected'].includes(decision)) return
+        if (!['approved', 'rejected'].includes(action)) return
         setSavingDecision(true)
         try {
           const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
             method: 'PATCH',
-            body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+            body: JSON.stringify({ action, reviewNotes: reviewNotes.trim() || undefined }),
           })
           setDetailInvoice(updated)
-          setDecision(null)
+          setDecisionConfirm(null)
           setReviewNotes('')
           await refreshThreadComments(updated._id, 'travel')
           void load()
@@ -497,15 +508,15 @@ export default function InvoiceTrackingPage() {
         return
       }
       if (role === 'accounts') {
-        if (!['paid', 'rejected'].includes(decision)) return
+        if (!['paid', 'rejected'].includes(action)) return
         setSavingDecision(true)
         try {
           const updated = await apiFetch<InvoiceRecord>(`/dashboard/invoices/${detailInvoice._id}`, {
             method: 'PATCH',
-            body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+            body: JSON.stringify({ action, reviewNotes: reviewNotes.trim() || undefined }),
           })
           setDetailInvoice(updated)
-          setDecision(null)
+          setDecisionConfirm(null)
           setReviewNotes('')
           await refreshThreadComments(updated._id, 'travel')
           void load()
@@ -517,15 +528,15 @@ export default function InvoiceTrackingPage() {
     }
     if (detailKind === 'payout' && detailPayout) {
       if (role === 'admin') {
-        if (!['approved', 'rejected'].includes(decision)) return
+        if (!['approved', 'rejected'].includes(action)) return
         setSavingDecision(true)
         try {
           const updated = await apiFetch<PayoutRecord>(`/dashboard/payout-requests/${detailPayout._id}`, {
             method: 'PATCH',
-            body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+            body: JSON.stringify({ action, reviewNotes: reviewNotes.trim() || undefined }),
           })
           setDetailPayout(updated)
-          setDecision(null)
+          setDecisionConfirm(null)
           setReviewNotes('')
           await refreshThreadComments(updated._id, 'payout')
           void load()
@@ -535,15 +546,15 @@ export default function InvoiceTrackingPage() {
         return
       }
       if (role === 'accounts') {
-        if (!['paid', 'rejected'].includes(decision)) return
+        if (!['paid', 'rejected'].includes(action)) return
         setSavingDecision(true)
         try {
           const updated = await apiFetch<PayoutRecord>(`/dashboard/payout-requests/${detailPayout._id}`, {
             method: 'PATCH',
-            body: JSON.stringify({ action: decision, reviewNotes: reviewNotes.trim() || undefined }),
+            body: JSON.stringify({ action, reviewNotes: reviewNotes.trim() || undefined }),
           })
           setDetailPayout(updated)
-          setDecision(null)
+          setDecisionConfirm(null)
           setReviewNotes('')
           await refreshThreadComments(updated._id, 'payout')
           void load()
@@ -551,6 +562,46 @@ export default function InvoiceTrackingPage() {
           setSavingDecision(false)
         }
       }
+    }
+  }
+
+  function decisionConfirmCopy(): { title: string; description: string; actionLabel: string; destructive: boolean } | null {
+    if (!decisionConfirm) return null
+    const submitter =
+      detailKind === 'travel'
+        ? detailInvoice?.fullName ?? 'the submitter'
+        : detailPayout?.fullName ?? 'the submitter'
+    const travelAmount =
+      detailInvoice != null
+        ? `₹${Number(detailInvoice.totalAmountClaimed).toLocaleString('en-IN')}`
+        : ''
+    const payoutAmount =
+      detailPayout != null
+        ? `₹${Number(detailPayout.requestedPayoutINR).toLocaleString('en-IN')}`
+        : ''
+    const kindLabel = detailKind === 'payout' ? 'points payout' : 'travel reimbursement'
+
+    if (decisionConfirm === 'approved') {
+      return {
+        title: `Approve this ${kindLabel}?`,
+        description: `You are about to approve ${submitter}'s ${kindLabel}. It will move to the accounts team for payment processing.${reviewNotes.trim() ? ' Your notes will be saved with this decision.' : ''}`,
+        actionLabel: 'Yes, approve',
+        destructive: false,
+      }
+    }
+    if (decisionConfirm === 'paid') {
+      return {
+        title: detailKind === 'payout' ? 'Mark payout as paid?' : 'Mark reimbursement as paid?',
+        description: `Confirm payment of ${detailKind === 'payout' ? payoutAmount : travelAmount} to ${submitter}. This marks the request as paid and notifies them.${reviewNotes.trim() ? ' Your notes will be saved.' : ''}`,
+        actionLabel: 'Yes, mark paid',
+        destructive: false,
+      }
+    }
+    return {
+      title: `Reject this ${kindLabel}?`,
+      description: `${submitter} will be notified that this ${kindLabel} was rejected.${reviewNotes.trim() ? ' Your notes will explain why.' : ' Consider adding a note so they know what to fix.'}`,
+      actionLabel: 'Yes, reject',
+      destructive: true,
     }
   }
 
@@ -1105,28 +1156,18 @@ export default function InvoiceTrackingPage() {
                         <Button
                           variant="outline"
                           className="border-green-500/30 bg-green-500/10 text-green-600"
-                          onClick={() => setDecision('approved')}
+                          onClick={() => setDecisionConfirm('approved')}
                         >
                           <CheckCircle2 className="mr-1 size-4" /> Approve
                         </Button>
                         <Button
                           variant="outline"
                           className="border-red-500/30 bg-red-500/10 text-red-600"
-                          onClick={() => setDecision('rejected')}
+                          onClick={() => setDecisionConfirm('rejected')}
                         >
                           <XCircle className="mr-1 size-4" /> Reject
                         </Button>
                       </div>
-                      {decision && (
-                        <DialogFooter>
-                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
-                            Cancel
-                          </Button>
-                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
-                            Confirm
-                          </Button>
-                        </DialogFooter>
-                      )}
                     </div>
                   )}
 
@@ -1145,28 +1186,18 @@ export default function InvoiceTrackingPage() {
                         <Button
                           variant="outline"
                           className="border-green-500/30 bg-green-500/10 text-green-600"
-                          onClick={() => setDecision('paid')}
+                          onClick={() => setDecisionConfirm('paid')}
                         >
                           <CheckCircle2 className="mr-1 size-4" /> Approve & Pay
                         </Button>
                         <Button
                           variant="outline"
                           className="border-red-500/30 bg-red-500/10 text-red-600"
-                          onClick={() => setDecision('rejected')}
+                          onClick={() => setDecisionConfirm('rejected')}
                         >
                           <XCircle className="mr-1 size-4" /> Reject
                         </Button>
                       </div>
-                      {decision && (
-                        <DialogFooter>
-                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
-                            Cancel
-                          </Button>
-                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
-                            Confirm
-                          </Button>
-                        </DialogFooter>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1361,28 +1392,18 @@ export default function InvoiceTrackingPage() {
                         <Button
                           variant="outline"
                           className="border-green-500/30 bg-green-500/10 text-green-600"
-                          onClick={() => setDecision('approved')}
+                          onClick={() => setDecisionConfirm('approved')}
                         >
                           <CheckCircle2 className="mr-1 size-4" /> Approve
                         </Button>
                         <Button
                           variant="outline"
                           className="border-red-500/30 bg-red-500/10 text-red-600"
-                          onClick={() => setDecision('rejected')}
+                          onClick={() => setDecisionConfirm('rejected')}
                         >
                           <XCircle className="mr-1 size-4" /> Reject
                         </Button>
                       </div>
-                      {decision && (
-                        <DialogFooter>
-                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
-                            Cancel
-                          </Button>
-                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
-                            Confirm
-                          </Button>
-                        </DialogFooter>
-                      )}
                     </div>
                   )}
 
@@ -1401,28 +1422,18 @@ export default function InvoiceTrackingPage() {
                         <Button
                           variant="outline"
                           className="border-green-500/30 bg-green-500/10 text-green-600"
-                          onClick={() => setDecision('paid')}
+                          onClick={() => setDecisionConfirm('paid')}
                         >
                           <CheckCircle2 className="mr-1 size-4" /> Approve & Pay
                         </Button>
                         <Button
                           variant="outline"
                           className="border-red-500/30 bg-red-500/10 text-red-600"
-                          onClick={() => setDecision('rejected')}
+                          onClick={() => setDecisionConfirm('rejected')}
                         >
                           <XCircle className="mr-1 size-4" /> Reject
                         </Button>
                       </div>
-                      {decision && (
-                        <DialogFooter>
-                          <Button variant="ghost" disabled={savingDecision} onClick={() => setDecision(null)}>
-                            Cancel
-                          </Button>
-                          <Button disabled={savingDecision} onClick={() => void confirmDecision()}>
-                            Confirm
-                          </Button>
-                        </DialogFooter>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1436,6 +1447,39 @@ export default function InvoiceTrackingPage() {
             ) : null}
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={!!decisionConfirm}
+          onOpenChange={(open) => {
+            if (!open) setDecisionConfirm(null)
+          }}
+        >
+          <AlertDialogContent className="max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle>{decisionConfirmCopy()?.title}</AlertDialogTitle>
+              <AlertDialogDescription className="text-left leading-relaxed">
+                {decisionConfirmCopy()?.description}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={savingDecision}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={savingDecision}
+                className={
+                  decisionConfirmCopy()?.destructive
+                    ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                    : undefined
+                }
+                onClick={(e) => {
+                  e.preventDefault()
+                  void confirmDecision()
+                }}
+              >
+                {savingDecision ? 'Saving…' : decisionConfirmCopy()?.actionLabel}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   )

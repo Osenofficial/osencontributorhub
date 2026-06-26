@@ -15,6 +15,7 @@ import {
   PlayCircle,
   Clock,
   Zap,
+  Trash2,
 } from 'lucide-react'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -35,6 +46,7 @@ import {
 import { TaskComments } from '@/components/task-comments'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
@@ -76,6 +88,18 @@ function getLatestRejectComment(task: any): string {
   return ''
 }
 
+function isSelfSubmittedTask(task: any): boolean {
+  const history = Array.isArray(task?.history) ? task.history : []
+  if (history.some((h: any) => h.action === 'self_submitted' || h.meta?.selfContribution)) return true
+  const cid = task?.createdBy?._id ?? task?.createdBy
+  const aid = task?.assignedTo?._id ?? task?.assignedTo
+  return Boolean(cid && aid && String(cid) === String(aid))
+}
+
+type WithdrawConfirm =
+  | null
+  | { taskId: string; mode: 'delete' | 'withdraw'; title: string; points: number }
+
 export type AllTasksViewProps = {
   pageTitle?: string
   pageDescription?: string
@@ -113,6 +137,8 @@ export function AllTasksView({
   /** When set, dialog scrolls to assignee edit/start section after open (pencil on card). */
   const [scrollAssigneeSectionTaskId, setScrollAssigneeSectionTaskId] = useState<string | null>(null)
   const assigneeActionsRef = useRef<HTMLDivElement>(null)
+  const [withdrawConfirm, setWithdrawConfirm] = useState<WithdrawConfirm>(null)
+  const [withdrawLoading, setWithdrawLoading] = useState(false)
 
   const isAdminUser = currentUser?.role === 'admin'
   const canSeeStaffThread =
@@ -294,6 +320,37 @@ export function AllTasksView({
     }
   }
 
+  async function executeWithdrawConfirm() {
+    if (!withdrawConfirm) return
+    setWithdrawLoading(true)
+    try {
+      const activeViewTaskId = viewTask?._id ?? viewTask?.id
+      const isActiveViewTask =
+        activeViewTaskId != null && String(activeViewTaskId) === String(withdrawConfirm.taskId)
+      if (withdrawConfirm.mode === 'delete') {
+        await apiFetch(`/dashboard/tasks/${withdrawConfirm.taskId}`, { method: 'DELETE' })
+        if (isActiveViewTask) {
+          setViewTask(null)
+          setTaskDetailMode(null)
+        }
+      } else {
+        const updated = await apiFetch<any>(
+          `/dashboard/tasks/${withdrawConfirm.taskId}/withdraw-submission`,
+          { method: 'POST' },
+        )
+        if (isActiveViewTask) {
+          setViewTask(updated)
+        }
+      }
+      refreshFeed()
+      setWithdrawConfirm(null)
+    } catch {
+      /* keep dialog open */
+    } finally {
+      setWithdrawLoading(false)
+    }
+  }
+
   function renderTaskBox(task: any) {
     const tid = task._id ?? task.id
     const createdBy = task.createdBy
@@ -307,6 +364,16 @@ export function AllTasksView({
     const taskAssignedToMe =
       Boolean(currentUser?.id && assigneeId != null && String(assigneeId) === String(currentUser.id))
     const showCardEditPencil = taskAssignedToMe && !isPool && task.status !== 'completed'
+    const canCardUndoSubmission =
+      taskAssignedToMe &&
+      task.status !== 'completed' &&
+      (task.status === 'submitted' || (task.status === 'rejected' && isSelfSubmittedTask(task)))
+    const cardUndoSubmissionMode: 'delete' | 'withdraw' | null =
+      canCardUndoSubmission && task.status === 'submitted' && !isSelfSubmittedTask(task)
+        ? 'withdraw'
+        : canCardUndoSubmission && isSelfSubmittedTask(task)
+          ? 'delete'
+          : null
     const dateStr = task.createdAt
       ? new Date(task.createdAt).toLocaleString('en-IN', {
           day: 'numeric',
@@ -416,21 +483,55 @@ export function AllTasksView({
               View
             </Button>
             {showCardEditPencil && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                title="Edit submission / start task"
-                className="h-8 w-8 shrink-0 p-0 text-primary hover:text-primary hover:bg-primary/10"
-                onClick={() => {
-                  setTaskDetailMode('edit')
-                  setViewTask(task)
-                  setScrollAssigneeSectionTaskId(String(tid))
-                }}
-              >
-                <Pencil className="size-3.5" />
-                <span className="sr-only">Edit task</span>
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    title="Edit submission / start task"
+                    className="h-8 w-8 shrink-0 p-0 text-primary transition-colors hover:bg-primary/10 hover:text-primary"
+                    onClick={() => {
+                      setTaskDetailMode('edit')
+                      setViewTask(task)
+                      setScrollAssigneeSectionTaskId(String(tid))
+                    }}
+                  >
+                    <Pencil className="size-3.5" />
+                    <span className="sr-only">Edit task</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent sideOffset={6}>Edit task</TooltipContent>
+              </Tooltip>
+            )}
+            {showCardEditPencil && cardUndoSubmissionMode && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    title={cardUndoSubmissionMode === 'delete' ? 'Delete submission' : 'Withdraw submission'}
+                    className="h-8 w-8 shrink-0 p-0 text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() =>
+                      setWithdrawConfirm({
+                        taskId: String(tid),
+                        mode: cardUndoSubmissionMode,
+                        title: task?.title ?? 'this task',
+                        points: task?.points ?? 0,
+                      })
+                    }
+                  >
+                    <Trash2 className="size-3.5" />
+                    <span className="sr-only">
+                      {cardUndoSubmissionMode === 'delete' ? 'Delete submission' : 'Withdraw submission'}
+                    </span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent sideOffset={6}>
+                  {cardUndoSubmissionMode === 'delete' ? 'Delete submission' : 'Withdraw submission'}
+                </TooltipContent>
+              </Tooltip>
             )}
             {canClaimPool && (
               <Button
@@ -960,6 +1061,59 @@ export function AllTasksView({
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!withdrawConfirm}
+        onOpenChange={(open) => {
+          if (!open) setWithdrawConfirm(null)
+        }}
+      >
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {withdrawConfirm?.mode === 'delete' ? 'Delete this submission?' : 'Withdraw submission?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 text-left">
+              <span className="block">
+                {withdrawConfirm?.mode === 'delete' ? (
+                  <>
+                    <strong className="text-foreground">&quot;{withdrawConfirm.title}&quot;</strong> will be
+                    permanently removed from review.
+                  </>
+                ) : (
+                  <>
+                    Your submission for{' '}
+                    <strong className="text-foreground">&quot;{withdrawConfirm?.title}&quot;</strong> will be pulled
+                    back. You can edit and submit again.
+                  </>
+                )}
+              </span>
+              <span className="block text-destructive/90">
+                No points ({withdrawConfirm?.points ?? 0} pts) have been awarded yet. If you remove this now, those
+                points will not count unless you submit again and get approved.
+              </span>
+              <span className="block">This cannot be undone from the dashboard once confirmed.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={withdrawLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={withdrawLoading}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault()
+                void executeWithdrawConfirm()
+              }}
+            >
+              {withdrawLoading
+                ? 'Working…'
+                : withdrawConfirm?.mode === 'delete'
+                  ? 'Yes, delete'
+                  : 'Yes, withdraw'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardPageShell>
   )
 }

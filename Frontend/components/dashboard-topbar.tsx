@@ -9,9 +9,6 @@ import {
   Zap,
   Shield,
   User,
-  Trophy,
-  LayoutGrid,
-  Receipt,
 } from 'lucide-react'
 import { useApp } from '@/lib/app-context'
 import { AvatarCircle } from '@/components/avatar-circle'
@@ -92,25 +89,6 @@ export function DashboardTopbar({ title }: { title: string }) {
             <DropdownMenuItem asChild>
               <Link href="/dashboard/profile" className="flex cursor-pointer items-center gap-2">
                 <User className="size-4" /> Profile
-              </Link>
-            </DropdownMenuItem>
-            {currentUser.role !== 'accounts' && currentUser.role !== 'evangelist' && (
-              <>
-                <DropdownMenuItem asChild>
-                  <Link href="/dashboard/all-tasks" className="flex cursor-pointer items-center gap-2">
-                    <LayoutGrid className="size-4" /> All tasks
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/dashboard/leaderboard" className="flex cursor-pointer items-center gap-2">
-                    <Trophy className="size-4" /> Leaderboard
-                  </Link>
-                </DropdownMenuItem>
-              </>
-            )}
-            <DropdownMenuItem asChild>
-              <Link href="/dashboard/invoices" className="flex cursor-pointer items-center gap-2">
-                <Receipt className="size-4" /> Invoices
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

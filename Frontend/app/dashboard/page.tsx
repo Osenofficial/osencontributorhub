@@ -10,6 +10,8 @@ import {
   Sparkles,
   CalendarRange,
   Send,
+  ListTodo,
+  PlusSquare,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useApp } from '@/lib/app-context'
@@ -153,6 +155,12 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-full lg:flex-col">
+                  <Link href="/dashboard/my-tasks" className="w-full sm:w-auto lg:w-full">
+                    <Button variant="outline" className="w-full gap-2 border-border/70" size="lg">
+                      <ListTodo className="size-4" />
+                      My tasks
+                    </Button>
+                  </Link>
                   <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
                     <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
                       All tasks

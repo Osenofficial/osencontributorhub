@@ -25,10 +25,10 @@ export function LandingNav() {
 
           {/* Desktop links */}
           <div className="hidden items-center gap-6 md:flex">
-            <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground">
               How it Works
             </a>
-            <Link href="/dashboard/leaderboard" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/dashboard/leaderboard" className="text-sm text-muted-foreground hover:text-foreground">
               Leaderboard
             </Link>
           </div>
@@ -36,22 +36,22 @@ export function LandingNav() {
           {/* Actions */}
           <div className="hidden items-center gap-3 md:flex">
             {loading ? (
-              <div className="h-8 w-24 animate-pulse rounded-md bg-muted/50" aria-hidden />
+              <div className="h-8 w-24 rounded-md bg-muted/50" aria-hidden />
             ) : isLoggedIn ? (
               <Link href="/dashboard">
-                <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple">
+                <Button size="sm" className="bg-primary text-primary-foreground neon-glow-purple">
                   Dashboard
                 </Button>
               </Link>
             ) : (
               <>
                 <Link href="/login">
-                  <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                  <Button variant="ghost" size="sm" className="text-muted-foreground">
                     Login
                   </Button>
                 </Link>
                 <Link href="/register">
-                  <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple">
+                  <Button size="sm" className="bg-primary text-primary-foreground neon-glow-purple">
                     Join OSEN
                   </Button>
                 </Link>
@@ -77,7 +77,7 @@ export function LandingNav() {
               <Link href="/dashboard/leaderboard" className="text-sm text-muted-foreground" onClick={() => setOpen(false)}>Leaderboard</Link>
               <div className="mt-2 flex flex-col gap-2">
                 {loading ? (
-                  <div className="h-9 w-full animate-pulse rounded-md bg-muted/50" aria-hidden />
+                  <div className="h-9 w-full rounded-md bg-muted/50" aria-hidden />
                 ) : isLoggedIn ? (
                   <Link href="/dashboard" className="w-full" onClick={() => setOpen(false)}>
                     <Button size="sm" className="w-full bg-primary neon-glow-purple">Dashboard</Button>
@@ -115,15 +115,15 @@ export function LandingFooter() {
           </div>
           <div className="flex items-center gap-5">
             <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground transition-colors text-sm">
+              className="text-muted-foreground hover:text-foreground text-sm">
               LinkedIn
             </a>
             <a href="https://x.com" target="_blank" rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground transition-colors text-sm">
+              className="text-muted-foreground hover:text-foreground text-sm">
               X (Twitter)
             </a>
             <a href="https://instagram.com" target="_blank" rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground transition-colors text-sm">
+              className="text-muted-foreground hover:text-foreground text-sm">
               Instagram
             </a>
           </div>

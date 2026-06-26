@@ -41,12 +41,12 @@ export default function LandingPage() {
 
         <div className="relative mx-auto max-w-4xl px-4 text-center">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-sm text-primary">
-            <Zap className="size-3.5 animate-pulse-glow" />
+            <Zap className="size-3.5" />
             <span>Built for the OSEN Community</span>
           </div>
 
           <h1 className="mb-6 text-5xl font-bold leading-tight tracking-tight text-balance md:text-7xl">
-            <span className="animate-shimmer">OSEN</span>{' '}
+            <span>OSEN</span>{' '}
             <span className="text-foreground">Contributor Hub</span>
           </h1>
 
@@ -58,19 +58,19 @@ export default function LandingPage() {
           <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             {authLoading ? (
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                <div className="h-11 w-40 animate-pulse rounded-md bg-muted/60" />
-                <div className="h-11 w-36 animate-pulse rounded-md bg-muted/40" />
+                <div className="h-11 w-40 rounded-md bg-muted/60" />
+                <div className="h-11 w-36 rounded-md bg-muted/40" />
               </div>
             ) : currentUser ? (
               <Link href="/dashboard">
-                <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple gap-2 px-8">
+                <Button size="lg" className="bg-primary text-primary-foreground neon-glow-purple gap-2 px-8">
                   Go to Dashboard <ArrowRight className="size-4" />
                 </Button>
               </Link>
             ) : (
               <>
                 <Link href="/register">
-                  <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 neon-glow-purple gap-2 px-8">
+                    <Button size="lg" className="bg-primary text-primary-foreground neon-glow-purple gap-2 px-8">
                     Get Started <ArrowRight className="size-4" />
                   </Button>
                 </Link>
@@ -110,7 +110,7 @@ export default function LandingPage() {
 
           <div className="grid gap-6 md:grid-cols-3">
             {HOW_IT_WORKS.map((step) => (
-              <div key={step.title} className={cn('glass rounded-2xl border p-6 transition-transform hover:-translate-y-1', step.border)}>
+              <div key={step.title} className={cn('glass rounded-2xl border p-6', step.border)}>
                 <div className={cn('mb-4 flex size-12 items-center justify-center rounded-xl border bg-background/50', step.border)}>
                   <step.icon className={cn('size-5', step.color)} />
                 </div>

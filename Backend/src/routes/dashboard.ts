@@ -177,11 +177,29 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
   }
 });
 
+function isSelfSubmittedTask(task: { history?: { action?: string; meta?: { selfContribution?: boolean } }[] }): boolean {
+  const history = Array.isArray(task.history) ? task.history : [];
+  return history.some(
+    (h) => h.action === "self_submitted" || h.meta?.selfContribution === true,
+  );
+}
+
 // Self-submit: user submits a completed contribution they did on their own (not assigned)
 dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
-    const { title, description, contributionType, category, points, githubLink, notionLink, googleDoc, comments, completedDate } = req.body;
+    const {
+      title,
+      description,
+      contributionType,
+      category,
+      points,
+      githubLink,
+      notionLink,
+      googleDoc,
+      comments,
+      completedDate,
+    } = req.body;
 
     if (!title || !contributionType) {
       return res.status(400).json({ message: "Title and contribution type are required" });
@@ -196,6 +214,7 @@ dashboardRouter.post("/contribute", async (req: AuthRequest, res, next) => {
       category: category || "community",
       priority: "medium",
       points: pts,
+      basePoints: pts,
       assignedTo: userId,
       createdBy: userId,
       contributorPeriod: period._id,
@@ -490,6 +509,83 @@ dashboardRouter.patch("/tasks/:id", async (req: AuthRequest, res, next) => {
       await notifyTaskSubmittedForReview(actorName, task.title);
     }
 
+    const updated = await Task.findById(task._id)
+      .populate("assignedTo", "name email")
+      .populate("createdBy", "name email")
+      .populate("pendingAssignmentRequests.user", "name email");
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete a self-submitted task (mistaken submit) — assignee only, not yet completed
+dashboardRouter.delete("/tasks/:id", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    const assigneeId = task.assignedTo?.toString();
+    if (assigneeId !== userId.toString()) {
+      return res.status(403).json({ message: "You can only delete your own submissions" });
+    }
+    if (task.status === "completed") {
+      return res.status(400).json({
+        message: "Completed tasks cannot be deleted. Points were already awarded.",
+      });
+    }
+    if (!isSelfSubmittedTask(task)) {
+      return res.status(400).json({
+        message: "Use withdraw submission for assigned tasks instead of delete.",
+      });
+    }
+    if (!["submitted", "rejected"].includes(task.status)) {
+      return res.status(400).json({ message: "Only pending or rejected self-submissions can be deleted." });
+    }
+    await Task.findByIdAndDelete(task._id);
+    res.json({ success: true, action: "deleted" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Withdraw an assigned task submission — returns task to in_progress
+dashboardRouter.post("/tasks/:id/withdraw-submission", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    const assigneeId = task.assignedTo?.toString();
+    if (assigneeId !== userId.toString()) {
+      return res.status(403).json({ message: "You can only withdraw your own submissions" });
+    }
+    if (isSelfSubmittedTask(task)) {
+      return res.status(400).json({
+        message: "Self-submitted tasks should be deleted instead of withdrawn.",
+      });
+    }
+    if (task.status === "completed") {
+      return res.status(400).json({
+        message: "Completed tasks cannot be withdrawn. Points were already awarded.",
+      });
+    }
+    if (task.status !== "submitted") {
+      return res.status(400).json({ message: "Only submitted tasks can be withdrawn." });
+    }
+    task.status = "in_progress";
+    task.submission = undefined;
+    task.history.push({
+      actor: userId,
+      action: "submission_withdrawn",
+      fromStatus: "submitted",
+      toStatus: "in_progress",
+      createdAt: new Date(),
+    });
+    await task.save();
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
       .populate("createdBy", "name email")

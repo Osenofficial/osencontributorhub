@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plus,
   CheckCircle2,
@@ -270,13 +271,15 @@ type AdminConfirm =
     }
   | { kind: 'approve_user'; userId: string; name: string }
   | { kind: 'reject_user'; userId: string; name: string }
+  | { kind: 'suspend_user'; userId: string; name: string }
+  | { kind: 'activate_user'; userId: string; name: string }
 
 function adminConfirmMeta(c: NonNullable<AdminConfirm>, userRole?: string) {
   switch (c.kind) {
     case 'approve_submission':
       return {
         title: 'Approve this submission?',
-        description: `Mark "${c.title}" as completed? The contributor will be notified.`,
+        description: `Mark "${c.title}" as completed? The contributor will receive the task points and be notified.`,
         actionLabel: 'Yes, approve',
         destructive: false,
       }
@@ -337,11 +340,27 @@ function adminConfirmMeta(c: NonNullable<AdminConfirm>, userRole?: string) {
         actionLabel: 'Yes, reject',
         destructive: true,
       }
+    case 'suspend_user':
+      return {
+        title: 'Suspend this member?',
+        description: `${c.name} will be logged out and blocked from signing in until you reactivate them. Their pending tasks stay assigned.`,
+        actionLabel: 'Yes, suspend',
+        destructive: true,
+      }
+    case 'activate_user':
+      return {
+        title: 'Reactivate this member?',
+        description: `${c.name} will be able to sign in and use the dashboard again.`,
+        actionLabel: 'Yes, reactivate',
+        destructive: false,
+      }
   }
 }
 
 export default function AdminPage() {
   const { currentUser } = useApp()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   if (!currentUser) return null
   const [tasks, setTasks] = useState<Task[]>([])
   const [view, setView] = useState<'tasks' | 'users' | 'announcements'>('tasks')
@@ -367,6 +386,12 @@ export default function AdminPage() {
   const [leadResolveNote, setLeadResolveNote] = useState('')
   const [leadResolveSubmitting, setLeadResolveSubmitting] = useState(false)
   const [taskCreating, setTaskCreating] = useState(false)
+
+  useEffect(() => {
+    if (searchParams.get('create') !== '1') return
+    setTaskForm({ mode: 'create' })
+    router.replace('/dashboard/admin', { scroll: false })
+  }, [router, searchParams])
 
   function formatDate(value: string | Date | undefined) {
     if (!value) return '—'
@@ -758,6 +783,18 @@ export default function AdminPage() {
         apiFetch(`/admin/users/${c.userId}/reject`, { method: 'POST' }).catch(() => {})
         setMembers((prev) =>
           prev.map((u) => (String(u._id) === c.userId ? { ...u, status: 'rejected' } : u)),
+        )
+        break
+      case 'suspend_user':
+        apiFetch(`/admin/users/${c.userId}/suspend`, { method: 'POST' }).catch(() => {})
+        setMembers((prev) =>
+          prev.map((u) => (String(u._id) === c.userId ? { ...u, status: 'suspended' } : u)),
+        )
+        break
+      case 'activate_user':
+        apiFetch(`/admin/users/${c.userId}/activate`, { method: 'POST' }).catch(() => {})
+        setMembers((prev) =>
+          prev.map((u) => (String(u._id) === c.userId ? { ...u, status: 'active' } : u)),
         )
         break
       default:
@@ -1726,12 +1763,13 @@ export default function AdminPage() {
                         size="icon"
                         variant="ghost"
                         className="size-7 text-destructive hover:bg-destructive/10"
-                        onClick={() => {
-                          apiFetch(`/admin/users/${user._id}/suspend`, { method: 'POST' }).catch(() => {})
-                          setMembers((prev) =>
-                            prev.map((u) => (u._id === user._id ? { ...u, status: 'suspended' } : u)),
-                          )
-                        }}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'suspend_user',
+                            userId: String(user._id),
+                            name: user.name ?? user.email ?? 'this member',
+                          })
+                        }
                       >
                         <Ban className="size-3.5" />
                       </Button>
@@ -1741,12 +1779,13 @@ export default function AdminPage() {
                         size="icon"
                         variant="ghost"
                         className="size-7 text-emerald-400 hover:bg-emerald-500/10"
-                        onClick={() => {
-                          apiFetch(`/admin/users/${user._id}/activate`, { method: 'POST' }).catch(() => {})
-                          setMembers((prev) =>
-                            prev.map((u) => (u._id === user._id ? { ...u, status: 'active' } : u)),
-                          )
-                        }}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'activate_user',
+                            userId: String(user._id),
+                            name: user.name ?? user.email ?? 'this member',
+                          })
+                        }
                       >
                         <Check className="size-3.5" />
                       </Button>

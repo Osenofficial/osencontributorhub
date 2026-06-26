@@ -11,6 +11,7 @@ import {
   Shield,
   MoreHorizontal,
   ListTodo,
+  PlusSquare,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/lib/app-context'
@@ -27,16 +28,16 @@ import { User, Trophy } from 'lucide-react'
 /** Primary mobile tabs — matches sidebar labels where possible */
 const PRIMARY_NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/my-tasks', label: 'Mine', icon: ListTodo },
-  { href: '/dashboard/all-tasks', label: 'Tasks', icon: LayoutGrid },
+  { href: '/dashboard/my-tasks', label: 'My tasks', icon: ListTodo },
+  { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
   { href: '/dashboard/submit-task', label: 'Submit', icon: Send, accent: true },
-  { href: '/dashboard/notifications', label: 'Alerts', icon: Bell, badge: true },
+  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, badge: true },
 ]
 
 const LIMITED_NAV = [
   { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
   { href: '/dashboard/submit-task', label: 'Submit', icon: Send, accent: true },
-  { href: '/dashboard/notifications', label: 'Alerts', icon: Bell, badge: true },
+  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, badge: true },
 ]
 
 export function MobileNav() {
@@ -140,7 +141,8 @@ export function MobileNav() {
             {showAdmin && (
               <DropdownMenuItem asChild>
                 <Link href="/dashboard/admin" className="flex items-center gap-2">
-                  <Shield className="size-4" /> {role === 'admin' ? 'Admin panel' : 'Program'}
+                  {role === 'admin' ? <PlusSquare className="size-4" /> : <Shield className="size-4" />}{' '}
+                  {role === 'admin' ? 'Create task' : 'Program'}
                 </Link>
               </DropdownMenuItem>
             )}

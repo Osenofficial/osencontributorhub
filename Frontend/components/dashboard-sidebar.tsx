@@ -31,13 +31,13 @@ const MAIN_NAV = [
 ]
 
 const ACCOUNT_NAV = [
-  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/invoices', label: 'Invoices / Billing', icon: Receipt },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, badge: true },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
 ]
 
 const NAV_ITEMS_INVOICES = [
-  { href: '/dashboard/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/dashboard/invoices', label: 'Invoices / Billing', icon: Receipt },
   { href: '/dashboard/submit-task', label: 'Submit task', icon: Send },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, badge: true },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
