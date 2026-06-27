@@ -10,6 +10,7 @@ import {
 import { Announcement } from "../models/Announcement";
 import type { UserRole } from "../models/User";
 import { sendNotificationEmailToAddress } from "../lib/notifyEmail";
+import { notifyUserAboutTask, buildAssignmentNotificationMessage } from "../lib/taskNotification";
 import type { SendMailResult } from "../lib/mail";
 import { ensureActiveContributorPeriod, startNextContributorPeriod } from "../lib/contributorPeriodService";
 
@@ -231,11 +232,14 @@ adminRouter.post("/users/:id/activate", requireRole("admin"), async (req: AuthRe
 adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest, res, next) => {
   try {
     const adminId = req.user!._id;
-    const { title, description, points, assignedTo, deadline, category, contributionType, priority } = req.body;
+    const { title, description, points, assignedTo, deadline, category, contributionType, priority, assignmentNote } =
+      req.body;
     const assigneeId =
       assignedTo != null && String(assignedTo).trim() !== "" && assignedTo !== "__pool__"
         ? assignedTo
         : null;
+    const noteTrimmed =
+      assigneeId && assignmentNote != null ? String(assignmentNote).trim().slice(0, 500) : "";
 
     const assignErr = await assigneeValidationError(assigneeId);
     if (assignErr) {
@@ -251,6 +255,7 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
       contributionType,
       priority,
       assignedTo: assigneeId,
+      assignmentNote: noteTrimmed || undefined,
       createdBy: adminId,
       contributorPeriod: period._id,
       deadline,
@@ -267,11 +272,12 @@ adminRouter.post("/tasks", requireRole("admin", "lead"), async (req: AuthRequest
     });
 
     if (assigneeId) {
-      await Notification.create({
-        user: assigneeId,
-        title: "New Task Assigned",
-        message: title,
-      });
+      await notifyUserAboutTask(
+        assigneeId,
+        task._id,
+        "New Task Assigned",
+        buildAssignmentNotificationMessage(title, noteTrimmed),
+      );
     }
 
     res.status(201).json(task);
@@ -328,6 +334,7 @@ const CREATOR_EDIT_FIELDS = [
   "priority",
   "assignedTo",
   "points",
+  "assignmentNote",
 ] as const;
 
 function taskCreatedByUser(task: { createdBy: unknown }, userId: unknown) {
@@ -377,7 +384,8 @@ function isLeadSelfAssignOnlyPatch(req: AuthRequest, body: Record<string, unknow
 }
 
 function applyCreatorPayloadToTask(task: any, body: Record<string, unknown>) {
-  const { title, description, deadline, category, contributionType, priority, assignedTo, points } = body;
+  const { title, description, deadline, category, contributionType, priority, assignedTo, points, assignmentNote } =
+    body;
   if (title !== undefined) task.title = String(title).trim();
   if (description !== undefined) task.description = String(description ?? "");
   if (deadline !== undefined) {
@@ -398,6 +406,10 @@ function applyCreatorPayloadToTask(task: any, body: Record<string, unknown>) {
   if (points !== undefined) {
     const p = Math.min(100, Math.max(1, parseInt(String(points), 10) || 10));
     task.points = p;
+  }
+  if (assignmentNote !== undefined) {
+    const note = String(assignmentNote ?? "").trim().slice(0, 500);
+    task.assignmentNote = note || undefined;
   }
 }
 
@@ -457,11 +469,12 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
       if (req.body.assignedTo !== undefined) {
         const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
         if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
-          await Notification.create({
-            user: nextAssigneeId,
-            title: "New Task Assigned",
-            message: task.title,
-          });
+          await notifyUserAboutTask(
+            nextAssigneeId,
+            task._id,
+            "New Task Assigned",
+            buildAssignmentNotificationMessage(task.title, task.assignmentNote),
+          );
         }
       }
     }
@@ -517,33 +530,21 @@ adminRouter.patch("/tasks/:id", requireRole("admin", "lead"), async (req: AuthRe
 
     if (fromStatus === "submitted" && task.status === "completed" && task.assignedTo) {
       const msg = `Your submission for "${task.title}" has been approved!`;
-      await Notification.create({
-        user: task.assignedTo,
-        title: "Task Approved",
-        message: msg,
-      });
+      await notifyUserAboutTask(task.assignedTo, task._id, "Task Approved", msg);
     }
 
     if (fromStatus === "submitted" && (task.status === "rejected" || task.status === "in_progress") && task.assignedTo) {
       const msg = rejectComment
         ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
         : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
-      await Notification.create({
-        user: task.assignedTo,
-        title: "Submission needs revision",
-        message: msg,
-      });
+      await notifyUserAboutTask(task.assignedTo, task._id, "Submission needs revision", msg);
     }
 
     if (fromStatus === "completed" && task.status === "rejected" && task.assignedTo) {
       const msg = rejectComment
         ? `Your completed task "${task.title}" was marked rejected by an admin (approval reversed). Reason: "${rejectComment}". Contact your lead if this is unexpected.`
         : `Your completed task "${task.title}" was marked rejected by an admin to reverse a mistaken approval. Contact your lead if this is unexpected.`;
-      await Notification.create({
-        user: task.assignedTo,
-        title: "Task approval reversed",
-        message: msg,
-      });
+      await notifyUserAboutTask(task.assignedTo, task._id, "Task approval reversed", msg);
     }
 
     const populated = await Task.findById(task._id)
@@ -640,11 +641,7 @@ adminRouter.post("/tasks/:id/approve-assignment", requireRole("admin", "lead"), 
     await task.save();
 
     const assignMsg = `You've been assigned: "${task.title}"`;
-    await Notification.create({
-      user: userId,
-      title: "Task assigned to you",
-      message: assignMsg,
-    });
+    await notifyUserAboutTask(userId, task._id, "Task assigned to you", assignMsg);
 
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
@@ -870,11 +867,12 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
         await task.save();
         const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
         if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
-          await Notification.create({
-            user: nextAssigneeId,
-            title: "New Task Assigned",
-            message: task.title,
-          });
+          await notifyUserAboutTask(
+            nextAssigneeId,
+            task._id,
+            "New Task Assigned",
+            buildAssignmentNotificationMessage(task.title, task.assignmentNote),
+          );
         }
         break;
       }
@@ -901,11 +899,7 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
           const subMsg = rejectComment
             ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
             : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
-          await Notification.create({
-            user: task.assignedTo,
-            title: "Submission needs revision",
-            message: subMsg,
-          });
+          await notifyUserAboutTask(task.assignedTo, task._id, "Submission needs revision", subMsg);
         }
         break;
       }
@@ -925,11 +919,7 @@ adminRouter.post("/lead-action-requests/:id/approve", requireRole("admin"), asyn
         await task.save();
         if (task.assignedTo) {
           const apprMsg = `Your submission for "${task.title}" has been approved!`;
-          await Notification.create({
-            user: task.assignedTo,
-            title: "Task Approved",
-            message: apprMsg,
-          });
+          await notifyUserAboutTask(task.assignedTo, task._id, "Task Approved", apprMsg);
         }
         break;
       }

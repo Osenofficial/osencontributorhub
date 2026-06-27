@@ -28,7 +28,7 @@ import { User, Trophy } from 'lucide-react'
 /** Primary mobile tabs — matches sidebar labels where possible */
 const PRIMARY_NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/my-tasks', label: 'My tasks', icon: ListTodo },
+  { href: '/dashboard/my-tasks', label: 'My tasks', icon: ListTodo, actionBadge: true },
   { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
   { href: '/dashboard/submit-task', label: 'Submit', icon: Send, accent: true },
   { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, badge: true },
@@ -44,12 +44,16 @@ export function MobileNav() {
   const pathname = usePathname()
   const { currentUser } = useApp()
   const [unread, setUnread] = useState(0)
+  const [myTasksActionCount, setMyTasksActionCount] = useState(0)
 
   useEffect(() => {
     if (!currentUser?.id) return
     apiFetch<any[]>('/dashboard/notifications')
       .then((items) => setUnread(items.filter((n: any) => !n.read).length))
       .catch(() => setUnread(0))
+    apiFetch<{ count: number }>('/dashboard/my-tasks-badge')
+      .then((data) => setMyTasksActionCount(data.count ?? 0))
+      .catch(() => setMyTasksActionCount(0))
   }, [currentUser?.id, pathname])
 
   if (!currentUser) return null
@@ -65,6 +69,8 @@ export function MobileNav() {
         {navItems.map((item) => {
           const active = pathname === item.href
           const isAccent = 'accent' in item && item.accent
+          const showActionBadge =
+            'actionBadge' in item && Boolean(item.actionBadge) && myTasksActionCount > 0
           return (
             <Link
               key={item.href}
@@ -88,6 +94,11 @@ export function MobileNav() {
               {'badge' in item && item.badge && unread > 0 && (
                 <span className="absolute right-2 top-1 flex size-2 rounded-full bg-primary" />
               )}
+              {showActionBadge ? (
+                <span className="absolute right-1 top-0.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">
+                  {myTasksActionCount > 9 ? '9+' : myTasksActionCount}
+                </span>
+              ) : null}
             </Link>
           )
         })}

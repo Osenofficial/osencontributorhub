@@ -7,8 +7,13 @@ import { sendMail, type SendMailResult } from "./mail";
  * Email for a single user (by Mongo id). Fire-and-forget; does not block the HTTP response.
  * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or Resend is not configured.
  */
-export function queueNotifyUserByEmail(userId: unknown, title: string, message: string): void {
-  void sendNotificationEmailToUserId(userId, title, message).catch((e) => {
+export function queueNotifyUserByEmail(
+  userId: unknown,
+  title: string,
+  message: string,
+  taskId?: string | null,
+): void {
+  void sendNotificationEmailToUserId(userId, title, message, taskId).catch((e) => {
     console.error("[notifyEmail] user", e);
   });
 }
@@ -18,9 +23,10 @@ export async function sendNotificationEmailToAddress(
   to: string,
   title: string,
   message: string,
+  taskId?: string | null,
 ): Promise<SendMailResult> {
   const appName = getEmailAppName();
-  const { html, text } = buildNotificationEmail({ title, message });
+  const { html, text } = buildNotificationEmail({ title, message, taskId });
   return sendMail({
     to,
     subject: `[${appName}] ${title}`,
@@ -33,11 +39,12 @@ export async function sendNotificationEmailToUserId(
   userId: unknown,
   title: string,
   message: string,
+  taskId?: string | null,
 ): Promise<SendMailResult | { ok: false; skipped: true; reason: "no_email" }> {
   const u = await User.findById(userId).select("email").lean<{ email?: string } | null>();
   const email = u?.email?.trim();
   if (!email) return { ok: false, skipped: true, reason: "no_email" };
-  return sendNotificationEmailToAddress(email, title, message);
+  return sendNotificationEmailToAddress(email, title, message, taskId);
 }
 
 /** Notify every user with the given role (e.g. all admins). */

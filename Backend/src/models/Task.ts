@@ -47,10 +47,12 @@ export interface ITask extends Document {
   contributorPeriod?: Types.ObjectId;
   /** Original points before overdue penalty (30% reduction). */
   basePoints?: number;
-  /** Set when 1-hour deadline reminder email/notification was sent. */
+  /** Set when 6-hour deadline reminder email/notification was sent. */
   deadlineReminderSentAt?: Date;
   /** Set when overdue 30% point penalty was applied. */
   overduePenaltyApplied?: boolean;
+  /** Optional note from lead/admin when assigning the task. */
+  assignmentNote?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -111,6 +113,7 @@ const TaskSchema = new Schema<ITask>(
     basePoints: { type: Number, min: 0 },
     deadlineReminderSentAt: { type: Date },
     overduePenaltyApplied: { type: Boolean, default: false, index: true },
+    assignmentNote: { type: String, trim: true, maxlength: 500 },
   },
   { timestamps: true }
 );

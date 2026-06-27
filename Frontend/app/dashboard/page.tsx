@@ -11,7 +11,8 @@ import {
   CalendarRange,
   Send,
   ListTodo,
-  PlusSquare,
+  PlayCircle,
+  Hourglass,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useApp } from '@/lib/app-context'
@@ -20,6 +21,7 @@ import { AvatarCircle } from '@/components/avatar-circle'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import { StatusBadge } from '@/components/status-badge'
 import {
   getPayoutForPoints,
   monthlyPointCapForCycle,
@@ -69,6 +71,8 @@ function StatCard({
 export default function DashboardPage() {
   const { currentUser } = useApp()
   const [myTasks, setMyTasks] = useState<any[]>([])
+  const [pendingStartTasks, setPendingStartTasks] = useState<any[]>([])
+  const [submittedWaitingTasks, setSubmittedWaitingTasks] = useState<any[]>([])
   const [sortedUsers, setSortedUsers] = useState<any[]>([])
   const [activeCycleSequence, setActiveCycleSequence] = useState<number | undefined>(undefined)
 
@@ -76,9 +80,13 @@ export default function DashboardPage() {
     apiFetch<any>('/dashboard/overview')
       .then((data) => {
         setMyTasks(data.recentTasks || [])
+        setPendingStartTasks(data.pendingStartTasks || [])
+        setSubmittedWaitingTasks(data.submittedWaitingTasks || [])
       })
       .catch(() => {
         setMyTasks([])
+        setPendingStartTasks([])
+        setSubmittedWaitingTasks([])
       })
     apiFetch<LeaderboardResponse>(leaderboardUrl(null))
       .then((data) => {
@@ -93,6 +101,9 @@ export default function DashboardPage() {
 
   const completedTasks = myTasks.filter((t) => t.status === 'completed')
   const inProgressTasks = myTasks.filter((t) => t.status === 'in_progress')
+  const todoAssignedTasks = pendingStartTasks
+  const rejectedTasks = myTasks.filter((t) => t.status === 'rejected')
+  const actionRequiredCount = todoAssignedTasks.length + inProgressTasks.length + rejectedTasks.length
   const myRank = sortedUsers.findIndex((u) => u.userId === currentUser?.id) + 1
   const monthlyCap = monthlyPointCapForCycle(activeCycleSequence)
   const pointsPercent = pointsProgressPercent(currentUser?.points ?? 0, monthlyCap)
@@ -135,9 +146,9 @@ export default function DashboardPage() {
                   <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
                     {currentUser?.role === 'admin'
                       ? 'Manage contributors, review work, and keep the program moving from here.'
-                      : inProgressTasks.length > 0
-                        ? `You’re making progress — ${inProgressTasks.length} active task${inProgressTasks.length !== 1 ? 's' : ''} right now. Finish strong!`
-                        : 'Browse All tasks to see the program list, claim work, and track what’s assigned to you.'}
+                      : actionRequiredCount > 0
+                        ? `You have ${actionRequiredCount} assigned task${actionRequiredCount !== 1 ? 's' : ''} needing your attention — open My tasks to start or submit work.`
+                        : 'Browse All tasks for open pool work, or wait for your lead to assign you something new.'}
                   </p>
                 </div>
               </div>
@@ -156,13 +167,18 @@ export default function DashboardPage() {
                 </div>
                 <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-full lg:flex-col">
                   <Link href="/dashboard/my-tasks" className="w-full sm:w-auto lg:w-full">
-                    <Button variant="outline" className="w-full gap-2 border-border/70" size="lg">
+                    <Button className="relative w-full gap-2 shadow-md shadow-primary/10" size="lg">
                       <ListTodo className="size-4" />
                       My tasks
+                      {actionRequiredCount > 0 && currentUser?.role !== 'admin' && (
+                        <span className="ml-1 rounded-full bg-primary-foreground/20 px-2 py-0.5 text-xs font-bold">
+                          {actionRequiredCount}
+                        </span>
+                      )}
                     </Button>
                   </Link>
                   <Link href="/dashboard/all-tasks" className="w-full sm:w-auto lg:w-full">
-                    <Button className="w-full gap-2 shadow-md shadow-primary/10" size="lg">
+                    <Button variant="outline" className="w-full gap-2 border-border/70" size="lg">
                       All tasks
                       <ArrowRight className="size-4" />
                     </Button>
@@ -177,6 +193,90 @@ export default function DashboardPage() {
               </div>
             </div>
           </section>
+
+          {currentUser?.role !== 'admin' && todoAssignedTasks.length > 0 && (
+            <section className="space-y-3 rounded-2xl border border-primary/30 bg-primary/[0.06] p-5">
+              <div className="flex items-center gap-2">
+                <PlayCircle className="size-5 text-primary" />
+                <h2 className="text-base font-semibold">New assignments</h2>
+              </div>
+              <div className="space-y-2">
+                {todoAssignedTasks.slice(0, 3).map((task) => {
+                  const tid = String(task._id ?? task.id)
+                  const leadName = task.createdBy?.name ?? 'Your lead'
+                  return (
+                    <div
+                      key={tid}
+                      className="flex flex-col gap-3 rounded-xl border border-border/50 bg-background/70 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium leading-snug">{task.title}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Assigned by {leadName}
+                          {task.points ? ` · ${task.points} pts` : ''}
+                        </p>
+                        {task.assignmentNote?.trim() && (
+                          <p className="mt-1 text-xs text-violet-700 dark:text-violet-300">
+                            {task.assignmentNote.trim()}
+                          </p>
+                        )}
+                      </div>
+                      <Link href={`/dashboard/my-tasks?task=${encodeURIComponent(tid)}`} className="shrink-0">
+                        <Button size="sm" className="w-full gap-1.5 sm:w-auto">
+                          <PlayCircle className="size-3.5" />
+                          Start task
+                        </Button>
+                      </Link>
+                    </div>
+                  )
+                })}
+              </div>
+              {todoAssignedTasks.length > 3 && (
+                <Link href="/dashboard/my-tasks" className="inline-flex text-sm font-medium text-primary hover:underline">
+                  View all {todoAssignedTasks.length} new assignments →
+                </Link>
+              )}
+            </section>
+          )}
+
+          {currentUser?.role !== 'admin' && submittedWaitingTasks.length > 0 && (
+            <section className="space-y-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/[0.06] p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Hourglass className="size-5 text-yellow-600 dark:text-yellow-400" />
+                  <h2 className="text-base font-semibold">Submitted, waiting for review</h2>
+                </div>
+                <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+                  {submittedWaitingTasks.length} task{submittedWaitingTasks.length !== 1 ? 's' : ''} — kuch karna nahi
+                </span>
+              </div>
+              <div className="space-y-2">
+                {submittedWaitingTasks.slice(0, 3).map((task) => {
+                  const tid = String(task._id ?? task.id)
+                  return (
+                    <Link
+                      key={tid}
+                      href={`/dashboard/my-tasks?task=${encodeURIComponent(tid)}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/70 px-4 py-3 transition-colors hover:border-yellow-500/40"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium leading-snug">{task.title}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Review pending · {task.points ?? 0} pts
+                        </p>
+                      </div>
+                      <StatusBadge value="submitted" type="status" />
+                    </Link>
+                  )
+                })}
+              </div>
+              {submittedWaitingTasks.length > 3 && (
+                <Link href="/dashboard/my-tasks" className="inline-flex text-sm font-medium text-yellow-700 hover:underline dark:text-yellow-300">
+                  View all in My tasks →
+                </Link>
+              )}
+            </section>
+          )}
 
           {/* Stats */}
           <section aria-label="Your stats">
@@ -234,6 +334,38 @@ export default function DashboardPage() {
               )}
             </div>
           </section>
+
+          {currentUser?.role !== 'admin' && myTasks.length > 0 && (
+            <section className="rounded-2xl border border-border/60 bg-card/40 p-5 shadow-sm backdrop-blur-sm">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold tracking-tight">Recent assigned tasks</h2>
+                  <p className="text-xs text-muted-foreground">Quick access to your latest work.</p>
+                </div>
+                <Link href="/dashboard/my-tasks" className="text-sm font-medium text-primary hover:underline">
+                  View all →
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {myTasks.slice(0, 5).map((task) => {
+                  const tid = String(task._id ?? task.id)
+                  return (
+                    <Link
+                      key={tid}
+                      href={`/dashboard/my-tasks?task=${encodeURIComponent(tid)}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 transition-colors hover:border-primary/30 hover:bg-background"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{task.title}</p>
+                        <p className="text-xs text-muted-foreground">{task.points ?? 0} pts</p>
+                      </div>
+                      <StatusBadge value={task.status} type="status" />
+                    </Link>
+                  )
+                })}
+              </div>
+            </section>
+          )}
 
           {/* Progress + report */}
           <div className="grid gap-4 lg:grid-cols-5 lg:gap-6">

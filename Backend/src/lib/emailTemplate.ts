@@ -29,7 +29,11 @@ function formatMessageHtml(message: string): string {
 }
 
 /** Pick the most useful dashboard page from the notification title. */
-export function resolveDashboardPath(title: string): string {
+export function resolveDashboardPath(title: string, taskId?: string | null): string {
+  if (taskId) {
+    return `/dashboard/my-tasks?task=${encodeURIComponent(taskId)}`;
+  }
+
   const t = title.toLowerCase();
 
   if (
@@ -70,7 +74,7 @@ export function resolveDashboardPath(title: string): string {
     t.includes("submission") ||
     t.includes("comment on task")
   ) {
-    return "/dashboard/all-tasks";
+    return "/dashboard/my-tasks";
   }
 
   return "/dashboard/notifications";
@@ -79,6 +83,7 @@ export function resolveDashboardPath(title: string): string {
 export type NotificationEmailContent = {
   title: string;
   message: string;
+  taskId?: string | null;
 };
 
 export function buildNotificationEmail(content: NotificationEmailContent): {
@@ -87,7 +92,7 @@ export function buildNotificationEmail(content: NotificationEmailContent): {
 } {
   const appName = getEmailAppName();
   const siteUrl = getSiteUrl();
-  const path = resolveDashboardPath(content.title);
+  const path = resolveDashboardPath(content.title, content.taskId);
   const actionUrl = `${siteUrl}${path}`;
   const actionLabel =
     path === "/login"
@@ -98,8 +103,8 @@ export function buildNotificationEmail(content: NotificationEmailContent): {
           ? "Review in invoices hub"
           : path === "/dashboard/invoice-tracking"
             ? "View tracking"
-            : path === "/dashboard/all-tasks"
-              ? "View tasks"
+            : path.startsWith("/dashboard/my-tasks")
+              ? "Open my tasks"
               : "View in dashboard";
 
   const safeTitle = escapeHtml(content.title);

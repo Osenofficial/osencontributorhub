@@ -24,7 +24,7 @@ import { apiFetch } from '@/lib/api'
 
 const MAIN_NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/my-tasks', label: 'My tasks', icon: UserCircle },
+  { href: '/dashboard/my-tasks', label: 'My tasks', icon: UserCircle, actionBadge: true },
   { href: '/dashboard/all-tasks', label: 'All tasks', icon: LayoutGrid },
   { href: '/dashboard/submit-task', label: 'Submit task', icon: Send },
   { href: '/dashboard/leaderboard', label: 'Leaderboard', icon: Trophy },
@@ -87,13 +87,17 @@ export function DashboardSidebar() {
   const pathname = usePathname()
   const { currentUser } = useApp()
   const [unread, setUnread] = useState(0)
+  const [myTasksActionCount, setMyTasksActionCount] = useState(0)
 
   useEffect(() => {
     if (!currentUser?.id) return
     apiFetch<any[]>('/dashboard/notifications')
       .then((items) => setUnread(items.filter((n: any) => !n.read).length))
       .catch(() => setUnread(0))
-  }, [currentUser?.id])
+    apiFetch<{ count: number }>('/dashboard/my-tasks-badge')
+      .then((data) => setMyTasksActionCount(data.count ?? 0))
+      .catch(() => setMyTasksActionCount(0))
+  }, [currentUser?.id, pathname])
 
   if (!currentUser) return null
 
@@ -127,7 +131,13 @@ export function DashboardSidebar() {
                 key={item.href}
                 {...item}
                 active={pathname === item.href}
-                unread={item.badge ? unread : undefined}
+                unread={
+                  'badge' in item && item.badge
+                    ? unread
+                    : 'actionBadge' in item && item.actionBadge
+                      ? myTasksActionCount
+                      : undefined
+                }
               />
             ))}
           </div>

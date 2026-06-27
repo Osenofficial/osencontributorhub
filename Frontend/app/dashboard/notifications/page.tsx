@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Bell,
   CheckCheck,
@@ -64,10 +65,20 @@ interface ApiNotification {
   message: string
   read: boolean
   createdAt: string
+  taskId?: string | { _id?: string } | null
+}
+
+function getTaskId(notif: ApiNotification): string | null {
+  const raw = notif.taskId
+  if (!raw) return null
+  if (typeof raw === 'string') return raw
+  if (typeof raw === 'object' && raw._id) return String(raw._id)
+  return null
 }
 
 export default function NotificationsPage() {
   const { currentUser } = useApp()
+  const router = useRouter()
   const [notifications, setNotifications] = useState<ApiNotification[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -95,6 +106,19 @@ export default function NotificationsPage() {
   function markRead(id: string) {
     apiFetch(`/dashboard/notifications/${id}/read`, { method: 'POST' }).catch(() => {})
     setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, read: true } : n)))
+  }
+
+  function handleNotificationClick(notif: ApiNotification) {
+    markRead(notif._id)
+    const taskId = getTaskId(notif)
+    if (taskId) {
+      router.push(`/dashboard/my-tasks?task=${encodeURIComponent(taskId)}`)
+      return
+    }
+    const type = getNotifType(notif.title)
+    if (type === 'task_assigned' || type === 'task_approved') {
+      router.push('/dashboard/my-tasks')
+    }
   }
 
   function formatDate(createdAt: string) {
@@ -155,7 +179,7 @@ export default function NotificationsPage() {
               <button
                 key={notif._id}
                 type="button"
-                onClick={() => markRead(notif._id)}
+                onClick={() => handleNotificationClick(notif)}
                 className={cn(
                   'surface-card flex w-full items-start gap-4 p-4 text-left transition-all hover:border-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                   !notif.read && 'border-primary/25 bg-primary/[0.04]',
@@ -179,6 +203,9 @@ export default function NotificationsPage() {
                   <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
                     {notif.message}
                   </p>
+                  {getTaskId(notif) && (
+                    <p className="mt-2 text-xs font-medium text-primary">Open task →</p>
+                  )}
                 </div>
                 {!notif.read && (
                   <span className="mt-2 size-2.5 shrink-0 rounded-full bg-primary shadow-[0_0_8px_var(--primary)]" />

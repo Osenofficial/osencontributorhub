@@ -1,8 +1,8 @@
 import { Task } from "../models/Task";
-import { Notification } from "../models/Notification";
+import { notifyUserAboutTask } from "../lib/taskNotification";
 import { queueNotifyUserByEmail } from "../lib/notifyEmail";
 
-const ONE_HOUR_MS = 60 * 60 * 1000;
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const PENALTY_MULTIPLIER = 0.7; // 30% reduction
 const ACTIVE_STATUSES = ["todo", "in_progress", "rejected"] as const;
 
@@ -18,7 +18,7 @@ function formatDeadlineIST(deadline: Date): string {
 }
 
 async function sendDeadlineReminders(now: Date): Promise<number> {
-  const windowEnd = new Date(now.getTime() + ONE_HOUR_MS);
+  const windowEnd = new Date(now.getTime() + SIX_HOURS_MS);
   const tasks = await Task.find({
     assignedTo: { $ne: null },
     deadline: { $gt: now, $lte: windowEnd },
@@ -31,11 +31,10 @@ async function sendDeadlineReminders(now: Date): Promise<number> {
     if (!task.assignedTo || !task.deadline) continue;
     const assigneeId = task.assignedTo;
     const deadlineLabel = formatDeadlineIST(task.deadline);
-    const title = "Task deadline in 1 hour";
+    const title = "Task deadline in 6 hours";
     const message = `"${task.title}" is due by ${deadlineLabel}. Finish and submit before the deadline — late completion may reduce points by 30%.`;
 
-    await Notification.create({ user: assigneeId, title, message });
-    queueNotifyUserByEmail(assigneeId, title, message);
+    await notifyUserAboutTask(assigneeId, task._id, title, message);
 
     task.deadlineReminderSentAt = now;
     task.history.push({
@@ -44,7 +43,7 @@ async function sendDeadlineReminders(now: Date): Promise<number> {
       fromStatus: task.status,
       toStatus: task.status,
       createdAt: now,
-      meta: { deadline: task.deadline },
+      meta: { deadline: task.deadline, hoursBefore: 6 },
     });
     await task.save();
     sent++;
@@ -88,8 +87,7 @@ async function applyOverduePenalties(now: Date): Promise<number> {
     });
 
     await task.save();
-    await Notification.create({ user: assigneeId, title, message });
-    queueNotifyUserByEmail(assigneeId, title, message);
+    await notifyUserAboutTask(assigneeId, task._id, title, message);
     applied++;
   }
   return applied;

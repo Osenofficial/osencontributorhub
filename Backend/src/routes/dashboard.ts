@@ -11,6 +11,7 @@ import { ContributorPeriod } from "../models/ContributorPeriod";
 import { ensureActiveContributorPeriod } from "../lib/contributorPeriodService";
 import { getPayoutForPoints, MIN_POINTS_FOR_PAYOUT } from "../lib/payoutTiers";
 import { normalizeAvatarField } from "../lib/userAvatar";
+import { notifyUserAboutTask } from "../lib/taskNotification";
 
 export const dashboardRouter = Router();
 
@@ -149,11 +150,23 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
   try {
     const userId = req.user!._id;
 
-    const [totalTasks, completedTasks, notifications, recentTasks, taskFeed] = await Promise.all([
+    const [totalTasks, completedTasks, notifications, recentTasks, pendingStartTasks, submittedWaitingTasks, taskFeed] =
+      await Promise.all([
       Task.countDocuments({ assignedTo: userId }),
       Task.countDocuments({ assignedTo: userId, status: "completed" }),
       Notification.find({ user: userId, read: false }).sort({ createdAt: -1 }).limit(10),
-      Task.find({ assignedTo: userId }).sort({ updatedAt: -1 }).limit(5),
+      Task.find({ assignedTo: userId })
+        .populate("createdBy", "name email")
+        .sort({ updatedAt: -1 })
+        .limit(5),
+      Task.find({ assignedTo: userId, status: "todo" })
+        .populate("createdBy", "name email")
+        .sort({ createdAt: -1 })
+        .limit(10),
+      Task.find({ assignedTo: userId, status: "submitted" })
+        .populate("createdBy", "name email")
+        .sort({ updatedAt: -1 })
+        .limit(10),
       Task.find()
         .populate("assignedTo", "name email")
         .populate("createdBy", "name email")
@@ -169,6 +182,8 @@ dashboardRouter.get("/overview", async (req: AuthRequest, res, next) => {
       completionRate: totalTasks ? completedTasks / totalTasks : 0,
       notifications,
       recentTasks,
+      pendingStartTasks,
+      submittedWaitingTasks,
       taskFeed,
       activities: [],
     });
@@ -325,11 +340,7 @@ dashboardRouter.post("/tasks/:id/claim", async (req: AuthRequest, res, next) => 
       createdAt: new Date(),
     });
     await task.save();
-    await Notification.create({
-      user: userId,
-      title: "You claimed a task",
-      message: task.title,
-    });
+    await notifyUserAboutTask(userId, task._id, "You claimed a task", task.title);
     const updated = await Task.findById(task._id)
       .populate("assignedTo", "name email")
       .populate("createdBy", "name email")
@@ -725,6 +736,20 @@ dashboardRouter.post("/tasks/:id/comments", async (req: AuthRequest, res, next) 
     }
 
     res.status(201).json(populated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Actionable assigned tasks count for sidebar badge on My tasks. */
+dashboardRouter.get("/my-tasks-badge", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!._id;
+    const count = await Task.countDocuments({
+      assignedTo: userId,
+      status: { $in: ["todo", "in_progress", "rejected"] },
+    });
+    res.json({ count });
   } catch (err) {
     next(err);
   }

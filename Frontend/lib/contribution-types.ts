@@ -4,17 +4,20 @@ export const CONTRIBUTION_TYPES = [
   {
     group: 'Video Editing',
     items: [
-      { id: 'video_reel', label: 'Reel editing', points: 5, category: 'development' as TaskCategory },
-      { id: 'video_short', label: '1–5 min video', points: 10, category: 'development' as TaskCategory },
-      { id: 'video_long', label: '5–10 min video', points: 15, category: 'development' as TaskCategory },
+      { id: 'reel_15s', label: '15 sec reel', points: 3, category: 'development' as TaskCategory },
+      { id: 'reel_30s', label: '30 sec reel', points: 5, category: 'development' as TaskCategory },
+      { id: 'reel_1min', label: '1 min reel', points: 7, category: 'development' as TaskCategory },
+      { id: 'reel_2min_plus', label: 'More than 2 min reel', points: 10, category: 'development' as TaskCategory },
     ],
   },
   {
     group: 'Design',
     items: [
       { id: 'design_small_changes', label: 'Small design changes', points: 2, category: 'design' as TaskCategory },
-      { id: 'design_poster', label: 'Event poster', points: 4, category: 'design' as TaskCategory },
-      { id: 'design_thumbnail', label: 'Thumbnail', points: 3, category: 'design' as TaskCategory },
+      { id: 'design_general', label: 'Design', points: 4, category: 'design' as TaskCategory },
+      { id: 'design_carousel', label: 'Carousel', points: 6, category: 'design' as TaskCategory },
+      { id: 'design_ppt', label: 'PPT design', points: 6, category: 'design' as TaskCategory },
+      { id: 'design_banner_logo', label: 'Banner and logo design', points: 3, category: 'design' as TaskCategory },
     ],
   },
   {
@@ -103,6 +106,11 @@ const LEGACY_CONTRIBUTION_LABELS: Record<string, string> = {
   volunteer_updates: 'Event updates',
   volunteer_registrations: 'Registrations',
   volunteer_feedback: 'Feedback collection',
+  video_reel: 'Reel editing',
+  video_short: '1–5 min video',
+  video_long: '5–10 min video',
+  design_poster: 'Event poster',
+  design_thumbnail: 'Thumbnail',
 }
 
 export function getContributionLabel(category: string, contributionTypeId?: string): string {

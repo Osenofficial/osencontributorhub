@@ -89,6 +89,7 @@ type FormState = {
   deadline: string
   assignedTo: string
   priority: Priority
+  assignmentNote: string
 }
 
 const LEAD_REQUEST_KIND_LABEL: Record<string, string> = {
@@ -107,6 +108,7 @@ const LEAD_REQUEST_FIELD_LABELS: Record<string, string> = {
   priority: 'Priority',
   points: 'Points',
   assignedTo: 'Assign to',
+  assignmentNote: 'Note for assignee',
   status: 'Status',
   rejectComment: 'Rejection note',
 }
@@ -149,6 +151,7 @@ const DEFAULT_FORM: FormState = {
   deadline: '',
   assignedTo: '__pool__',
   priority: 'medium',
+  assignmentNote: '',
 }
 
 function taskToFormState(task: any): FormState {
@@ -175,6 +178,7 @@ function taskToFormState(task: any): FormState {
     deadline,
     assignedTo,
     priority: (task.priority as Priority) ?? 'medium',
+    assignmentNote: task.assignmentNote ?? '',
   }
 }
 
@@ -561,6 +565,8 @@ export default function AdminPage() {
       category: form.category,
       contributionType: form.contributionType || undefined,
       priority: form.priority,
+      assignmentNote:
+        assignPayload && form.assignmentNote.trim() ? form.assignmentNote.trim().slice(0, 500) : undefined,
     }
     apiFetch<Task>('/admin/tasks', {
       method: 'POST',
@@ -595,6 +601,7 @@ export default function AdminPage() {
       category: form.category,
       contributionType: form.contributionType || undefined,
       priority: form.priority,
+      assignmentNote: form.assignmentNote.trim().slice(0, 500) || undefined,
     }
     const existing = findTaskById(taskId)
     if (canActDirectOnTask(existing, currentUser, form)) {
@@ -1997,7 +2004,7 @@ export default function AdminPage() {
                   onChange={(deadline) => setForm((f) => ({ ...f, deadline }))}
                   hint={
                     taskForm?.mode === 'create'
-                      ? 'Defaults to today 11:59 PM. Assignee gets email 1 hour before deadline; late completion costs 30% points.'
+                      ? 'Defaults to today 11:59 PM. Assignee gets email 6 hours before deadline; late completion costs 30% points.'
                       : 'Pick date and time for the deadline.'
                   }
                   minDate={taskForm?.mode === 'create' ? new Date(new Date().setHours(0, 0, 0, 0)) : undefined}
@@ -2055,6 +2062,20 @@ export default function AdminPage() {
                     })}
                   </SelectContent>
                 </Select>
+                {form.assignedTo && form.assignedTo !== '__pool__' && (
+                  <div className="mt-3 space-y-2">
+                    <label className="text-sm font-medium text-foreground">Note for assignee (optional)</label>
+                    <Textarea
+                      className="min-h-[72px] resize-none bg-background border-border text-sm"
+                      placeholder='e.g. "Focus on mobile layout — deadline is Friday"'
+                      value={form.assignmentNote}
+                      onChange={(e) => setForm((f) => ({ ...f, assignmentNote: e.target.value.slice(0, 500) }))}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Shown on the assignee&apos;s task and included in their notification.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
