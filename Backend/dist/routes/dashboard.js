@@ -17,6 +17,7 @@ const ContributorPeriod_1 = require("../models/ContributorPeriod");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
 const payoutTiers_1 = require("../lib/payoutTiers");
 const userAvatar_1 = require("../lib/userAvatar");
+const taskNotification_1 = require("../lib/taskNotification");
 exports.dashboardRouter = (0, express_1.Router)();
 exports.dashboardRouter.use(auth_1.requireAuth);
 /** Completed points for one contributor cycle (same basis as GET /leaderboard for that period). */
@@ -117,11 +118,22 @@ async function notifyPayoutCommentRecipients(doc, commenterId, authorName) {
 exports.dashboardRouter.get("/overview", async (req, res, next) => {
     try {
         const userId = req.user._id;
-        const [totalTasks, completedTasks, notifications, recentTasks, taskFeed] = await Promise.all([
+        const [totalTasks, completedTasks, notifications, recentTasks, pendingStartTasks, submittedWaitingTasks, taskFeed] = await Promise.all([
             Task_1.Task.countDocuments({ assignedTo: userId }),
             Task_1.Task.countDocuments({ assignedTo: userId, status: "completed" }),
             Notification_1.Notification.find({ user: userId, read: false }).sort({ createdAt: -1 }).limit(10),
-            Task_1.Task.find({ assignedTo: userId }).sort({ updatedAt: -1 }).limit(5),
+            Task_1.Task.find({ assignedTo: userId })
+                .populate("createdBy", "name email")
+                .sort({ updatedAt: -1 })
+                .limit(5),
+            Task_1.Task.find({ assignedTo: userId, status: "todo" })
+                .populate("createdBy", "name email")
+                .sort({ createdAt: -1 })
+                .limit(10),
+            Task_1.Task.find({ assignedTo: userId, status: "submitted" })
+                .populate("createdBy", "name email")
+                .sort({ updatedAt: -1 })
+                .limit(10),
             Task_1.Task.find()
                 .populate("assignedTo", "name email")
                 .populate("createdBy", "name email")
@@ -136,6 +148,8 @@ exports.dashboardRouter.get("/overview", async (req, res, next) => {
             completionRate: totalTasks ? completedTasks / totalTasks : 0,
             notifications,
             recentTasks,
+            pendingStartTasks,
+            submittedWaitingTasks,
             taskFeed,
             activities: [],
         });
@@ -152,20 +166,12 @@ function isSelfSubmittedTask(task) {
 exports.dashboardRouter.post("/contribute", async (req, res, next) => {
     try {
         const userId = req.user._id;
-        const { title, description, contributionType, category, points, githubLink, notionLink, googleDoc, comments, completedDate, submissionDeadline, } = req.body;
+        const { title, description, contributionType, category, points, githubLink, notionLink, googleDoc, comments, completedDate, } = req.body;
         if (!title || !contributionType) {
             return res.status(400).json({ message: "Title and contribution type are required" });
         }
         const pts = Math.min(100, Math.max(1, parseInt(String(points)) || 10));
         const period = await (0, contributorPeriodService_1.ensureActiveContributorPeriod)(userId);
-        let deadline;
-        if (submissionDeadline) {
-            const parsed = new Date(String(submissionDeadline));
-            if (Number.isNaN(parsed.getTime())) {
-                return res.status(400).json({ message: "Invalid submission deadline" });
-            }
-            deadline = parsed;
-        }
         const task = await Task_1.Task.create({
             title,
             description: description || "",
@@ -178,7 +184,6 @@ exports.dashboardRouter.post("/contribute", async (req, res, next) => {
             createdBy: userId,
             contributorPeriod: period._id,
             status: "submitted",
-            deadline,
             submission: {
                 githubLink: githubLink || "",
                 notionLink: notionLink || "",
@@ -279,11 +284,7 @@ exports.dashboardRouter.post("/tasks/:id/claim", async (req, res, next) => {
             createdAt: new Date(),
         });
         await task.save();
-        await Notification_1.Notification.create({
-            user: userId,
-            title: "You claimed a task",
-            message: task.title,
-        });
+        await (0, taskNotification_1.notifyUserAboutTask)(userId, task._id, "You claimed a task", task.title);
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -654,6 +655,20 @@ exports.dashboardRouter.post("/tasks/:id/comments", async (req, res, next) => {
             });
         }
         res.status(201).json(populated);
+    }
+    catch (err) {
+        next(err);
+    }
+});
+/** Actionable assigned tasks count for sidebar badge on My tasks. */
+exports.dashboardRouter.get("/my-tasks-badge", async (req, res, next) => {
+    try {
+        const userId = req.user._id;
+        const count = await Task_1.Task.countDocuments({
+            assignedTo: userId,
+            status: { $in: ["todo", "in_progress", "rejected"] },
+        });
+        res.json({ count });
     }
     catch (err) {
         next(err);

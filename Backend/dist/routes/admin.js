@@ -9,6 +9,7 @@ const Notification_1 = require("../models/Notification");
 const LeadActionRequest_1 = require("../models/LeadActionRequest");
 const Announcement_1 = require("../models/Announcement");
 const notifyEmail_1 = require("../lib/notifyEmail");
+const taskNotification_1 = require("../lib/taskNotification");
 const contributorPeriodService_1 = require("../lib/contributorPeriodService");
 const ANNOUNCEMENT_ROLES = [
     "admin",
@@ -195,10 +196,11 @@ exports.adminRouter.post("/users/:id/activate", (0, auth_1.requireRole)("admin")
 exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), async (req, res, next) => {
     try {
         const adminId = req.user._id;
-        const { title, description, points, assignedTo, deadline, category, contributionType, priority } = req.body;
+        const { title, description, points, assignedTo, deadline, category, contributionType, priority, assignmentNote } = req.body;
         const assigneeId = assignedTo != null && String(assignedTo).trim() !== "" && assignedTo !== "__pool__"
             ? assignedTo
             : null;
+        const noteTrimmed = assigneeId && assignmentNote != null ? String(assignmentNote).trim().slice(0, 500) : "";
         const assignErr = await assigneeValidationError(assigneeId);
         if (assignErr) {
             return res.status(400).json({ message: assignErr });
@@ -212,6 +214,7 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
             contributionType,
             priority,
             assignedTo: assigneeId,
+            assignmentNote: noteTrimmed || undefined,
             createdBy: adminId,
             contributorPeriod: period._id,
             deadline,
@@ -227,11 +230,7 @@ exports.adminRouter.post("/tasks", (0, auth_1.requireRole)("admin", "lead"), asy
             ],
         });
         if (assigneeId) {
-            await Notification_1.Notification.create({
-                user: assigneeId,
-                title: "New Task Assigned",
-                message: title,
-            });
+            await (0, taskNotification_1.notifyUserAboutTask)(assigneeId, task._id, "New Task Assigned", (0, taskNotification_1.buildAssignmentNotificationMessage)(title, noteTrimmed));
         }
         res.status(201).json(task);
     }
@@ -287,6 +286,7 @@ const CREATOR_EDIT_FIELDS = [
     "priority",
     "assignedTo",
     "points",
+    "assignmentNote",
 ];
 function taskCreatedByUser(task, userId) {
     const createdBy = task.createdBy;
@@ -336,7 +336,7 @@ function isLeadSelfAssignOnlyPatch(req, body, task) {
     return Boolean(next && String(next) === String(req.user._id));
 }
 function applyCreatorPayloadToTask(task, body) {
-    const { title, description, deadline, category, contributionType, priority, assignedTo, points } = body;
+    const { title, description, deadline, category, contributionType, priority, assignedTo, points, assignmentNote } = body;
     if (title !== undefined)
         task.title = String(title).trim();
     if (description !== undefined)
@@ -361,6 +361,10 @@ function applyCreatorPayloadToTask(task, body) {
     if (points !== undefined) {
         const p = Math.min(100, Math.max(1, parseInt(String(points), 10) || 10));
         task.points = p;
+    }
+    if (assignmentNote !== undefined) {
+        const note = String(assignmentNote ?? "").trim().slice(0, 500);
+        task.assignmentNote = note || undefined;
     }
 }
 async function notifyAdminsLeadActionLine(message) {
@@ -414,11 +418,7 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
             if (req.body.assignedTo !== undefined) {
                 const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
                 if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
-                    await Notification_1.Notification.create({
-                        user: nextAssigneeId,
-                        title: "New Task Assigned",
-                        message: task.title,
-                    });
+                    await (0, taskNotification_1.notifyUserAboutTask)(nextAssigneeId, task._id, "New Task Assigned", (0, taskNotification_1.buildAssignmentNotificationMessage)(task.title, task.assignmentNote));
                 }
             }
         }
@@ -466,31 +466,19 @@ exports.adminRouter.patch("/tasks/:id", (0, auth_1.requireRole)("admin", "lead")
         await task.save();
         if (fromStatus === "submitted" && task.status === "completed" && task.assignedTo) {
             const msg = `Your submission for "${task.title}" has been approved!`;
-            await Notification_1.Notification.create({
-                user: task.assignedTo,
-                title: "Task Approved",
-                message: msg,
-            });
+            await (0, taskNotification_1.notifyUserAboutTask)(task.assignedTo, task._id, "Task Approved", msg);
         }
         if (fromStatus === "submitted" && (task.status === "rejected" || task.status === "in_progress") && task.assignedTo) {
             const msg = rejectComment
                 ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
                 : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
-            await Notification_1.Notification.create({
-                user: task.assignedTo,
-                title: "Submission needs revision",
-                message: msg,
-            });
+            await (0, taskNotification_1.notifyUserAboutTask)(task.assignedTo, task._id, "Submission needs revision", msg);
         }
         if (fromStatus === "completed" && task.status === "rejected" && task.assignedTo) {
             const msg = rejectComment
                 ? `Your completed task "${task.title}" was marked rejected by an admin (approval reversed). Reason: "${rejectComment}". Contact your lead if this is unexpected.`
                 : `Your completed task "${task.title}" was marked rejected by an admin to reverse a mistaken approval. Contact your lead if this is unexpected.`;
-            await Notification_1.Notification.create({
-                user: task.assignedTo,
-                title: "Task approval reversed",
-                message: msg,
-            });
+            await (0, taskNotification_1.notifyUserAboutTask)(task.assignedTo, task._id, "Task approval reversed", msg);
         }
         const populated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
@@ -579,11 +567,7 @@ exports.adminRouter.post("/tasks/:id/approve-assignment", (0, auth_1.requireRole
         });
         await task.save();
         const assignMsg = `You've been assigned: "${task.title}"`;
-        await Notification_1.Notification.create({
-            user: userId,
-            title: "Task assigned to you",
-            message: assignMsg,
-        });
+        await (0, taskNotification_1.notifyUserAboutTask)(userId, task._id, "Task assigned to you", assignMsg);
         const updated = await Task_1.Task.findById(task._id)
             .populate("assignedTo", "name email")
             .populate("createdBy", "name email")
@@ -789,11 +773,7 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                 await task.save();
                 const nextAssigneeId = task.assignedTo != null ? String(task.assignedTo) : null;
                 if (nextAssigneeId && nextAssigneeId !== prevAssigneeId) {
-                    await Notification_1.Notification.create({
-                        user: nextAssigneeId,
-                        title: "New Task Assigned",
-                        message: task.title,
-                    });
+                    await (0, taskNotification_1.notifyUserAboutTask)(nextAssigneeId, task._id, "New Task Assigned", (0, taskNotification_1.buildAssignmentNotificationMessage)(task.title, task.assignmentNote));
                 }
                 break;
             }
@@ -819,11 +799,7 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                     const subMsg = rejectComment
                         ? `Your submission for "${task.title}" was not approved. Note from reviewer: "${rejectComment}". Please revise and resubmit when ready.`
                         : `Your submission for "${task.title}" was not approved. Please revise and resubmit when ready.`;
-                    await Notification_1.Notification.create({
-                        user: task.assignedTo,
-                        title: "Submission needs revision",
-                        message: subMsg,
-                    });
+                    await (0, taskNotification_1.notifyUserAboutTask)(task.assignedTo, task._id, "Submission needs revision", subMsg);
                 }
                 break;
             }
@@ -843,11 +819,7 @@ exports.adminRouter.post("/lead-action-requests/:id/approve", (0, auth_1.require
                 await task.save();
                 if (task.assignedTo) {
                     const apprMsg = `Your submission for "${task.title}" has been approved!`;
-                    await Notification_1.Notification.create({
-                        user: task.assignedTo,
-                        title: "Task Approved",
-                        message: apprMsg,
-                    });
+                    await (0, taskNotification_1.notifyUserAboutTask)(task.assignedTo, task._id, "Task Approved", apprMsg);
                 }
                 break;
             }

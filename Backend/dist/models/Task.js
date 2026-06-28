@@ -90,5 +90,6 @@ const TaskSchema = new mongoose_1.Schema({
     basePoints: { type: Number, min: 0 },
     deadlineReminderSentAt: { type: Date },
     overduePenaltyApplied: { type: Boolean, default: false, index: true },
+    assignmentNote: { type: String, trim: true, maxlength: 500 },
 }, { timestamps: true });
 exports.Task = mongoose_1.default.models.Task || mongoose_1.default.model("Task", TaskSchema);

@@ -11,15 +11,15 @@ const mail_1 = require("./mail");
  * Email for a single user (by Mongo id). Fire-and-forget; does not block the HTTP response.
  * Skipped automatically when ENABLE_EMAIL_NOTIFICATIONS is false or Resend is not configured.
  */
-function queueNotifyUserByEmail(userId, title, message) {
-    void sendNotificationEmailToUserId(userId, title, message).catch((e) => {
+function queueNotifyUserByEmail(userId, title, message, taskId) {
+    void sendNotificationEmailToUserId(userId, title, message, taskId).catch((e) => {
         console.error("[notifyEmail] user", e);
     });
 }
 /** Awaited delivery — use for bulk sends (announcements) where you need a delivery report. */
-async function sendNotificationEmailToAddress(to, title, message) {
+async function sendNotificationEmailToAddress(to, title, message, taskId) {
     const appName = (0, emailTemplate_1.getEmailAppName)();
-    const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message });
+    const { html, text } = (0, emailTemplate_1.buildNotificationEmail)({ title, message, taskId });
     return (0, mail_1.sendMail)({
         to,
         subject: `[${appName}] ${title}`,
@@ -27,12 +27,12 @@ async function sendNotificationEmailToAddress(to, title, message) {
         html,
     });
 }
-async function sendNotificationEmailToUserId(userId, title, message) {
+async function sendNotificationEmailToUserId(userId, title, message, taskId) {
     const u = await User_1.User.findById(userId).select("email").lean();
     const email = u?.email?.trim();
     if (!email)
         return { ok: false, skipped: true, reason: "no_email" };
-    return sendNotificationEmailToAddress(email, title, message);
+    return sendNotificationEmailToAddress(email, title, message, taskId);
 }
 /** Notify every user with the given role (e.g. all admins). */
 function queueNotifyUsersByRole(role, title, message) {

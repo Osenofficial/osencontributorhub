@@ -28,7 +28,10 @@ function formatMessageHtml(message) {
     return escapeHtml(message).replace(/\n/g, "<br />");
 }
 /** Pick the most useful dashboard page from the notification title. */
-function resolveDashboardPath(title) {
+function resolveDashboardPath(title, taskId) {
+    if (taskId) {
+        return `/dashboard/my-tasks?task=${encodeURIComponent(taskId)}`;
+    }
     const t = title.toLowerCase();
     if (t.includes("signup pending") ||
         t.includes("lead action") ||
@@ -56,14 +59,14 @@ function resolveDashboardPath(title) {
         t.includes("assignment") ||
         t.includes("submission") ||
         t.includes("comment on task")) {
-        return "/dashboard/all-tasks";
+        return "/dashboard/my-tasks";
     }
     return "/dashboard/notifications";
 }
 function buildNotificationEmail(content) {
     const appName = getEmailAppName();
     const siteUrl = getSiteUrl();
-    const path = resolveDashboardPath(content.title);
+    const path = resolveDashboardPath(content.title, content.taskId);
     const actionUrl = `${siteUrl}${path}`;
     const actionLabel = path === "/login"
         ? "Log in"
@@ -73,8 +76,8 @@ function buildNotificationEmail(content) {
                 ? "Review in invoices hub"
                 : path === "/dashboard/invoice-tracking"
                     ? "View tracking"
-                    : path === "/dashboard/all-tasks"
-                        ? "View tasks"
+                    : path.startsWith("/dashboard/my-tasks")
+                        ? "Open my tasks"
                         : "View in dashboard";
     const safeTitle = escapeHtml(content.title);
     const safeMessage = formatMessageHtml(content.message);
